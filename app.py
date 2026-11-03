@@ -34,6 +34,37 @@ POSTERS.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="Saimo local", version="1.0.0")
 fila: queue.Queue = queue.Queue()
 SEARCH_FTS = False
+controles: dict[int, core.DownloadControl] = {}
+controle_lock = threading.Lock()
+ids_enfileirados: set[int] = set()
+fila_lock = threading.Lock()
+
+
+def enfileirar(task: tuple) -> None:
+    job_id = int(task[0])
+    with fila_lock:
+        if job_id not in ids_enfileirados:
+            ids_enfileirados.add(job_id)
+            fila.put(task)
+
+
+def limpar_dados_job(output_base: str) -> None:
+    """Remove apenas os arquivos pertencentes ao job cancelado."""
+    base = Path(output_base).resolve()
+    root = Path(core.DESTINO).resolve()
+    if not base.is_relative_to(root):
+        return
+    final = Path(str(base) + ".mp4")
+    for path in (final, Path(str(final) + ".part")):
+        try:
+            path.unlink(missing_ok=True)
+        except IsADirectoryError:
+            shutil.rmtree(path, ignore_errors=True)
+    shutil.rmtree(Path(str(final) + ".segs"), ignore_errors=True)
+    try:
+        base.parent.rmdir()
+    except OSError:
+        pass
 
 
 def db() -> sqlite3.Connection:
@@ -116,13 +147,17 @@ def preparar_armazenamento() -> None:
                 SEARCH_FTS = False
 
         pending = con.execute("SELECT id,titulo,status,task_json FROM jobs "
-                              "WHERE status IN ('fila','resolvendo','baixando')").fetchall()
+                              "WHERE status IN ('fila','resolvendo','baixando','pausando','pausado','cancelando')").fetchall()
         for row in pending:
             try:
                 payload = json.loads(row["task_json"] or "")
                 task = (int(row["id"]), row["titulo"], payload["sources"], payload["output_base"])
-                con.execute("UPDATE jobs SET status='fila',pct=0,erro=NULL WHERE id=?", (row["id"],))
-                fila.put(task)
+                if row["status"] == "cancelando":
+                    limpar_dados_job(payload["output_base"])
+                    con.execute("UPDATE jobs SET status='cancelado',pct=0 WHERE id=?", (row["id"],))
+                    continue
+                con.execute("UPDATE jobs SET status='fila',erro=NULL WHERE id=?", (row["id"],))
+                enfileirar(task)
             except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                 con.execute("UPDATE jobs SET status='erro',erro=? WHERE id=?",
                             ("job antigo sem dados para recuperação; enfileire novamente", row["id"]))
@@ -169,15 +204,23 @@ def validar_sessao_media(value: str) -> bool:
 def worker() -> None:
     while True:
         job_id, title, sources, output_base = fila.get()
+        with fila_lock:
+            ids_enfileirados.discard(int(job_id))
         con = db()
         progress_lock = threading.Lock()
+        control = core.DownloadControl()
         try:
-            claimed = con.execute("UPDATE jobs SET status='resolvendo' WHERE id=? AND status='fila'",
-                                  (job_id,)).rowcount
+            with controle_lock:
+                controles[job_id] = control
+                claimed = con.execute("UPDATE jobs SET status='resolvendo' WHERE id=? AND status='fila'",
+                                      (job_id,)).rowcount
+                con.commit()
             if not claimed:
+                with controle_lock:
+                    controles.pop(job_id, None)
                 continue
-            con.commit()
-            resolved = core.resolver_fontes(sources)
+            control.checkpoint()
+            resolved = core.resolver_fontes(sources, control)
             if not resolved:
                 con.execute("UPDATE jobs SET status='erro', erro=? WHERE id=?", ("sem fonte disponível", job_id))
                 con.commit()
@@ -186,6 +229,7 @@ def worker() -> None:
             last_progress = {"time": 0.0, "bytes": -1.0}
 
             def progress(done: int, total: int) -> None:
+                control.checkpoint()
                 percent = min(99.9, done / total * 100) if total else 0
                 with progress_lock:
                     now = time.monotonic()
@@ -197,20 +241,45 @@ def worker() -> None:
                     last_progress["time"] = now
                     last_progress["bytes"] = done
 
-            result = core.baixar(resolved, output_base, progress)
-            if result:
-                relative = os.path.relpath(result, core.DESTINO)
-                con.execute("UPDATE jobs SET status='concluido', pct=100, arquivo=? WHERE id=?",
-                            (relative, job_id))
+            result = core.baixar(resolved, output_base, progress, control)
+            with controle_lock:
+                control.checkpoint()
+                if result:
+                    relative = os.path.relpath(result, core.DESTINO)
+                    con.execute("UPDATE jobs SET status='concluido', pct=100, arquivo=? WHERE id=?",
+                                (relative, job_id))
+                else:
+                    con.execute("UPDATE jobs SET status='erro', erro=? WHERE id=?",
+                                ("todas as fontes falharam", job_id))
+                con.commit()
+        except core.DownloadPaused:
+            row = con.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row and row["status"] == "cancelando":
+                limpar_dados_job(output_base)
+                con.execute("UPDATE jobs SET status='cancelado',pct=0,arquivo=NULL,erro=NULL WHERE id=?",
+                            (job_id,))
             else:
-                con.execute("UPDATE jobs SET status='erro', erro=? WHERE id=?",
-                            ("todas as fontes falharam", job_id))
+                con.execute("UPDATE jobs SET status='pausado',erro=NULL WHERE id=?", (job_id,))
+            con.commit()
+        except core.DownloadCancelled:
+            limpar_dados_job(output_base)
+            con.execute("UPDATE jobs SET status='cancelado',pct=0,arquivo=NULL,erro=NULL WHERE id=?",
+                        (job_id,))
             con.commit()
         except Exception as exc:
-            con.execute("UPDATE jobs SET status='erro', erro=? WHERE id=?",
-                        (str(exc)[:200] or type(exc).__name__, job_id))
+            row = con.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row and row["status"] == "cancelando":
+                limpar_dados_job(output_base)
+                con.execute("UPDATE jobs SET status='cancelado',pct=0,arquivo=NULL,erro=NULL WHERE id=?",
+                            (job_id,))
+            else:
+                con.execute("UPDATE jobs SET status='erro', erro=? WHERE id=?",
+                            (str(exc)[:200] or type(exc).__name__, job_id))
             con.commit()
         finally:
+            with controle_lock:
+                if controles.get(job_id) is control:
+                    controles.pop(job_id, None)
             con.close()
             fila.task_done()
 
@@ -377,7 +446,7 @@ async def download(req: Request):
                 created.append(job_id)
         con.commit()
     for task in pending:
-        fila.put(task)
+        enfileirar(task)
     if not created:
         raise HTTPException(400, "não há fontes para os episódios selecionados")
     return {"jobs": created}
@@ -391,6 +460,88 @@ def jobs(req: Request):
     return {"jobs": rows}
 
 
+@app.post("/api/jobs/{job_id}/pause")
+def pause_job(req: Request, job_id: int):
+    checar(req)
+    with controle_lock:
+        with session() as con:
+            row = con.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "job não encontrado")
+            status = row["status"]
+            if status == "pausado":
+                return {"ok": True, "status": status}
+            if status == "fila":
+                con.execute("UPDATE jobs SET status='pausado' WHERE id=?", (job_id,))
+                return {"ok": True, "status": "pausado"}
+            if status not in ("resolvendo", "baixando"):
+                raise HTTPException(409, "este download não pode ser pausado agora")
+            control = controles.get(job_id)
+            if control:
+                control.pause()
+                next_status = "pausando"
+            else:
+                next_status = "pausado"
+            con.execute("UPDATE jobs SET status=? WHERE id=?", (next_status, job_id))
+    return {"ok": True, "status": next_status}
+
+
+@app.post("/api/jobs/{job_id}/resume")
+def resume_job(req: Request, job_id: int):
+    checar(req)
+    task = None
+    with session() as con:
+        row = con.execute("SELECT titulo,status,task_json FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "job não encontrado")
+        if row["status"] != "pausado":
+            raise HTTPException(409, "o download não está pausado")
+        try:
+            payload = json.loads(row["task_json"] or "")
+            task = (job_id, row["titulo"], payload["sources"], payload["output_base"])
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            raise HTTPException(409, "dados do download não permitem retomada")
+        con.execute("UPDATE jobs SET status='fila',erro=NULL WHERE id=?", (job_id,))
+    if task:
+        enfileirar(task)
+    return {"ok": True, "status": "fila"}
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(req: Request, job_id: int):
+    checar(req)
+    output_base = None
+    active = False
+    with controle_lock:
+        with session() as con:
+            row = con.execute("SELECT status,task_json FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "job não encontrado")
+            if row["status"] in ("concluido", "erro", "cancelado"):
+                raise HTTPException(409, "este download já terminou")
+            try:
+                output_base = json.loads(row["task_json"] or "")["output_base"]
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                raise HTTPException(409, "dados do download não permitem limpeza segura")
+            if row["status"] in ("resolvendo", "baixando", "pausando", "cancelando"):
+                control = controles.get(job_id)
+                if control:
+                    control.cancel()
+                    con.execute("UPDATE jobs SET status='cancelando' WHERE id=?", (job_id,))
+                else:
+                    con.execute("UPDATE jobs SET status='cancelado',pct=0,arquivo=NULL WHERE id=?",
+                                (job_id,))
+            else:
+                con.execute("UPDATE jobs SET status='cancelado',pct=0,arquivo=NULL WHERE id=?", (job_id,))
+    if output_base:
+        # Se o worker ainda está ativo, ele limpa no próximo ponto de controle.
+        with controle_lock:
+            active = job_id in controles
+        if not active:
+            limpar_dados_job(output_base)
+    return {"ok": True, "status": "cancelando" if active else "cancelado"}
+
+
 @app.delete("/api/jobs/{job_id}")
 def delete_job(req: Request, job_id: int):
     checar(req)
@@ -398,7 +549,7 @@ def delete_job(req: Request, job_id: int):
         row = con.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
         if not row:
             raise HTTPException(404, "job não encontrado")
-        if row["status"] in ("fila", "resolvendo", "baixando"):
+        if row["status"] in ("fila", "resolvendo", "baixando", "pausando", "pausado", "cancelando"):
             raise HTTPException(409, "não é possível apagar um download em andamento")
         con.execute("DELETE FROM jobs WHERE id=?", (job_id,))
     return {"ok": True}

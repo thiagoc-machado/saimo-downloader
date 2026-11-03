@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from difflib import SequenceMatcher
 import json
 import os
@@ -126,13 +127,18 @@ def resolver_poster_tmdb(tipo: str, titulo: str, ano: str) -> tuple[str | None, 
     best: tuple[float, str] | None = None
     for result in results:
         poster_path = result.get("poster_path")
-        candidate_title = result.get("name" if tipo == "s" else "title", "")
-        if not poster_path or not candidate_title:
+        candidate_titles = ([result.get("name", ""), result.get("original_name", "")]
+                            if tipo == "s" else
+                            [result.get("title", ""), result.get("original_title", "")])
+        candidate_titles = [value for value in candidate_titles if value]
+        if not poster_path or not candidate_titles:
             continue
-        candidate = normalizar_titulo(candidate_title)
-        candidate_tokens = set(candidate.split())
-        overlap = len(query_tokens & candidate_tokens) / max(1, len(query_tokens))
-        score = max(SequenceMatcher(None, query, candidate).ratio(), overlap)
+        score = 0.0
+        for candidate_title in candidate_titles:
+            candidate = normalizar_titulo(candidate_title)
+            candidate_tokens = set(candidate.split())
+            overlap = len(query_tokens & candidate_tokens) / max(1, len(query_tokens))
+            score = max(score, SequenceMatcher(None, query, candidate).ratio(), overlap)
         if best is None or score > best[0]:
             best = score, poster_path
     poster = f"https://image.tmdb.org/t/p/w342/{best[1].lstrip('/')}" if best and best[0] >= 0.5 else None
@@ -156,8 +162,12 @@ def buscar_capas_tmdb(con: sqlite3.Connection) -> None:
             con.execute("UPDATE items SET poster=? WHERE id=?", (cache_rows[cache_key], row["id"]))
     con.commit()
     cached = len(missing) - sum(map(len, lookup_groups.values()))
+    new_by_type = Counter(key.split("|", 1)[0] for key in lookup_groups)
     print(f"fallback TMDb: {len(lookup_groups)} buscas novas; {cached} itens já avaliados/cacheados",
           flush=True)
+    print("fallback TMDb por tipo: " + ", ".join(
+        f"{'séries' if kind == 's' else 'filmes'}={count}" for kind, count in sorted(new_by_type.items())),
+        flush=True)
 
     def lookup(group):
         cache_key, rows = group
@@ -166,12 +176,26 @@ def buscar_capas_tmdb(con: sqlite3.Connection) -> None:
             representative["tipo"], representative["titulo"], representative["ano"] or "")
         return cache_key, poster, cacheable, [row["id"] for row in rows]
 
-    resolved = completed = 0
+    resolved = completed = failed = 0
+    resolved_by_type: Counter[str] = Counter()
     groups = list(lookup_groups.items())
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(lookup, group) for group in groups]
         for future in as_completed(futures):
-            cache_key, poster, cacheable, item_ids = future.result()
+            try:
+                cache_key, poster, cacheable, item_ids = future.result()
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                failed += 1
+                completed += 1
+                if failed == 1:
+                    print(f"aviso: uma busca TMDb falhou ({type(exc).__name__}); continuando as demais",
+                          flush=True)
+                if completed % 25 == 0 or completed == len(groups):
+                    print(f"fallback TMDb: {completed}/{len(groups)} buscas concluídas; "
+                          f"{resolved} capas encontradas; {failed} falhas", flush=True)
+                continue
             completed += 1
             if cacheable:
                 con.execute("INSERT OR REPLACE INTO tmdb_poster_cache(chave,poster) VALUES(?,?)",
@@ -180,13 +204,15 @@ def buscar_capas_tmdb(con: sqlite3.Connection) -> None:
                 con.executemany("UPDATE items SET poster=? WHERE id=?",
                                 [(poster, item_id) for item_id in item_ids])
                 resolved += len(item_ids)
+                resolved_by_type[cache_key.split("|", 1)[0]] += len(item_ids)
             if completed % 25 == 0 or completed == len(groups):
                 con.commit()
                 print(f"fallback TMDb: {completed}/{len(groups)} buscas concluídas; "
-                      f"{resolved} capas encontradas", flush=True)
+                      f"{resolved} capas encontradas; {failed} falhas", flush=True)
     con.commit()
     print(f"fallback TMDb finalizado: {resolved} capas encontradas de {len(missing)} títulos; "
-          "resultados positivos e negativos foram guardados em cache", flush=True)
+          f"por tipo: séries={resolved_by_type['s']}, filmes={resolved_by_type['f']}; "
+          f"{failed} buscas falharam. Resultados válidos foram guardados em cache", flush=True)
 
 
 def baixar_capas(con: sqlite3.Connection) -> None:
@@ -303,6 +329,8 @@ def main() -> None:
                         help="buscar no TMDb capas ausentes (requer token configurado)")
     parser.add_argument("--somente-capas", action="store_true",
                         help="não sincronizar catálogo; processar somente capas do banco local")
+    parser.add_argument("--refazer-cache-negativo", action="store_true",
+                        help="repetir buscas anteriores do TMDb que não encontraram capa")
     args = parser.parse_args()
     if args.diagnostico_fichas:
         diagnosticar_fichas()
@@ -317,6 +345,10 @@ def main() -> None:
 
     if args.somente_capas:
         if args.tmdb_fallback:
+            if args.refazer_cache_negativo:
+                removed = con.execute("DELETE FROM tmdb_poster_cache WHERE poster='' ").rowcount
+                con.commit()
+                print(f"cache TMDb: {removed} buscas sem capa serão repetidas", flush=True)
             buscar_capas_tmdb(con)
         if args.imagens:
             baixar_capas(con)
@@ -491,6 +523,10 @@ def main() -> None:
     con.commit()
 
     if args.tmdb_fallback:
+        if args.refazer_cache_negativo:
+            removed = con.execute("DELETE FROM tmdb_poster_cache WHERE poster='' ").rowcount
+            con.commit()
+            print(f"cache TMDb: {removed} buscas sem capa serão repetidas", flush=True)
         buscar_capas_tmdb(con)
 
     if args.imagens:

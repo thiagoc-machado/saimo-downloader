@@ -100,6 +100,8 @@ docker compose exec saimo python sync_catalog.py --somente-capas --imagens --tmd
 
 Essa etapa mostra o progresso das buscas e downloads. Resultados sem pôster também ficam em cache; para refazer essas buscas após atualizar a credencial ou o catálogo, apague a tabela `tmdb_poster_cache` do SQLite.
 
+Para repetir somente as buscas que já tinham sido feitas sem encontrar capa, acrescente `--refazer-cache-negativo` ao comando de capas.
+
 O fallback só consulta títulos sem capa e grava as imagens em `static/posters/`. A busca usa o tipo (filme/série), o título e o ano quando disponível; títulos sem correspondência confiável ficam sem capa. A utilização da API e das imagens deve seguir os [termos do TMDb](https://www.themoviedb.org/api-terms-of-use).
 
 Para acompanhar o serviço ou encerrá-lo:
@@ -114,6 +116,7 @@ docker compose down
 - A busca aceita título e filtro por filmes ou séries.
 - Clique em um título para escolher dublado/legendado. Para séries, escolha a temporada e episódios (`primeiro`, `todos`, `1,3,5` ou `1-3`).
 - A aba **Downloads** mostra o estado dos jobs e os arquivos encontrados na pasta de destino.
+- Na fila, use **Pausar**, **Retomar** e **Cancelar e apagar dados** para controlar cada job.
 - A pasta de destino é carregada ao iniciar o servidor. Reinicie o processo para aplicar uma mudança no `.env`.
 - A API de documentação fica em <http://127.0.0.1:8787/docs>.
 
@@ -121,7 +124,7 @@ docker compose down
 
 - A primeira sincronização pode levar alguns minutos. Execute novamente para atualizar o catálogo.
 - `SAIMO_PARALLEL` controla quantos arquivos são baixados ao mesmo tempo; `SAIMO_SEGMENTOS` controla os segmentos de cada fonte HLS.
-- Jobs enfileirados são persistidos no SQLite e retomados quando o servidor reinicia. Um job interrompido recomeça do início.
+- Jobs enfileirados e pausados são persistidos no SQLite e retomados quando o servidor reinicia. Pausas preservam partes concluídas; downloads HTTP retomam do ponto salvo quando a fonte aceita requisições Range, e HLS reutiliza segmentos já baixados.
 - A busca usa o tokenizer trigram do FTS5 quando a versão de SQLite o oferece; em versões sem esse recurso, usa busca SQLite convencional.
 - Fontes DASH (`.mpd`) e playlists HLS criptografadas ou com mapas/faixas de bytes não são suportadas; a fila informa esse motivo no erro do job.
 - `SAIMO_TOKEN` protege a API e os arquivos servidos por `/media`. Deixe o servidor acessível apenas a pessoas de confiança.

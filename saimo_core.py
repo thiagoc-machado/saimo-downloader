@@ -33,6 +33,41 @@ _thread_sessions = threading.local()
 Path(DESTINO).mkdir(parents=True, exist_ok=True)
 
 
+class DownloadPaused(Exception):
+    """Sinaliza uma pausa cooperativa sem remover o progresso parcial."""
+
+
+class DownloadCancelled(Exception):
+    """Sinaliza cancelamento; o worker remove os dados do job."""
+
+
+class DownloadControl:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._paused = False
+        self._cancelled = False
+
+    def pause(self) -> None:
+        with self._lock:
+            self._paused = True
+
+    def resume(self) -> None:
+        with self._lock:
+            self._paused = False
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled = True
+            self._paused = False
+
+    def checkpoint(self) -> None:
+        with self._lock:
+            if self._cancelled:
+                raise DownloadCancelled()
+            if self._paused:
+                raise DownloadPaused()
+
+
 def session() -> requests.Session:
     """Cada worker/thread usa sua própria sessão HTTP."""
     value = getattr(_thread_sessions, "value", None)
@@ -44,8 +79,10 @@ def session() -> requests.Session:
 
 
 def get(url: str, referer: str | None = None, binary: bool = False, stream: bool = False,
-        cookies=None):
+        cookies=None, extra_headers: dict[str, str] | None = None):
     headers = {"Referer": referer} if referer else {}
+    if extra_headers:
+        headers.update(extra_headers)
     last_error = "falha de rede"
     for attempt in range(TENTATIVAS):
         try:
@@ -115,9 +152,11 @@ def resolver_vod(url: str) -> str | None:
     return None
 
 
-def resolver_fontes(fontes: list[str]) -> list[str]:
+def resolver_fontes(fontes: list[str], control: DownloadControl | None = None) -> list[str]:
     resolved: list[str] = []
     for url in fontes:
+        if control:
+            control.checkpoint()
         if urlparse(url).path == "/api/stream":
             url = resolver_stream(url) or ""
             if not url:
@@ -125,6 +164,8 @@ def resolver_fontes(fontes: list[str]) -> list[str]:
         url = resolver_vod(url) or url
         if url not in resolved:
             resolved.append(url)
+    if control:
+        control.checkpoint()
     return resolved
 
 
@@ -152,26 +193,43 @@ def escolher_variante(master: str, qualidade: int) -> str | None:
     return eligible[-1][1]
 
 
-def baixar_mp4(url: str, destino: str, cb=None, referer: str | None = None) -> None:
+def baixar_mp4(url: str, destino: str, cb=None, referer: str | None = None,
+               control: DownloadControl | None = None) -> None:
     target = prox(url, referer) if usar_proxy(url) else url
     temporary = destino + ".part"
+    offset = os.path.getsize(temporary) if os.path.exists(temporary) else 0
+    headers = {"Range": f"bytes={offset}-"} if offset else {}
+    if control:
+        control.checkpoint()
     try:
-        with get(target, referer=referer, stream=True) as response, open(temporary, "wb") as output:
-            total = int(response.headers.get("Content-Length") or 0)
-            done = 0
+        response = get(target, referer=referer, stream=True, extra_headers=headers)
+        if offset and response.status_code != 206:
+            response.close()
+            offset = 0
+            response = get(target, referer=referer, stream=True)
+        with response, open(temporary, "ab" if offset else "wb") as output:
+            length = int(response.headers.get("Content-Length") or 0)
+            total = offset + length if length else 0
+            done = offset
             for chunk in response.iter_content(CHUNK):
+                if control:
+                    control.checkpoint()
                 if chunk:
                     output.write(chunk)
                     done += len(chunk)
                     if cb:
                         cb(done, total)
         os.replace(temporary, destino)
-    finally:
+    except (DownloadPaused, DownloadCancelled):
+        raise
+    except Exception:
         if os.path.exists(temporary):
             os.remove(temporary)
+        raise
 
 
-def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = None) -> None:
+def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = None,
+               control: DownloadControl | None = None) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     ref = referer or referer_de(master_url)
@@ -206,12 +264,16 @@ def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = Non
     def download_segment(item):
         nonlocal completed
         index, segment_url = item
+        if control:
+            control.checkpoint()
         path = os.path.join(folder, f"{index:06d}.ts")
         if not (os.path.exists(path) and os.path.getsize(path)):
             segment_target = prox(segment_url, ref) if usar_proxy(segment_url) else segment_url
             temporary = path + ".part"
             with get(segment_target, referer=ref, stream=True, cookies=segment_cookies) as response, open(temporary, "wb") as output:
                 for chunk in response.iter_content(CHUNK):
+                    if control:
+                        control.checkpoint()
                     if chunk:
                         output.write(chunk)
             os.replace(temporary, path)
@@ -222,6 +284,8 @@ def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = Non
         return path
 
     try:
+        if control:
+            control.checkpoint()
         with ThreadPoolExecutor(max_workers=SEGMENTOS) as pool:
             list(pool.map(download_segment, enumerate(segments)))
         concat = os.path.join(folder, "lista.txt")
@@ -229,28 +293,68 @@ def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = Non
             for index in range(len(segments)):
                 path = os.path.join(folder, f"{index:06d}.ts").replace("'", "'\\''")
                 output.write(f"file '{path}'\n")
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-                        "-i", concat, "-c", "copy", "-bsf:a", "aac_adtstoasc", destino], check=True)
+        process = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
+                                    "-i", concat, "-c", "copy", "-bsf:a", "aac_adtstoasc", destino])
+        try:
+            while process.poll() is None:
+                if control:
+                    try:
+                        control.checkpoint()
+                    except (DownloadPaused, DownloadCancelled):
+                        try:
+                            process.terminate()
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+                        raise
+                time.sleep(0.2)
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, process.args)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
     except FileNotFoundError as exc:
+        shutil.rmtree(folder, ignore_errors=True)
+        if os.path.exists(destino):
+            os.remove(destino)
         raise RuntimeError("ffmpeg não encontrado; instale ffmpeg para juntar vídeos HLS") from exc
-    finally:
+    except (DownloadPaused, DownloadCancelled):
+        if os.path.exists(destino):
+            os.remove(destino)
+        raise
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        if os.path.exists(destino):
+            os.remove(destino)
+        raise
+    else:
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def baixar(fontes: list[str], destino_base: str, cb=None) -> str | None:
+def baixar(fontes: list[str], destino_base: str, cb=None,
+           control: DownloadControl | None = None) -> str | None:
     errors = []
     for url in fontes:
         parsed = urlparse(url.lower())
         output = destino_base + ".mp4"
         try:
+            if control:
+                control.checkpoint()
             if parsed.path.endswith((".m3u8", ".txt")):
-                baixar_hls(url, output, cb, referer_de(url))
+                baixar_hls(url, output, cb, referer_de(url), control)
             elif parsed.path.endswith(".mpd"):
                 errors.append("fonte DASH (.mpd) não suportada")
                 continue
             else:
-                baixar_mp4(url, output, cb, referer_de(url))
+                baixar_mp4(url, output, cb, referer_de(url), control)
             return output
+        except (DownloadPaused, DownloadCancelled):
+            raise
         except Exception as exc:
             errors.append(f"{type(exc).__name__}: {str(exc)[:120]}")
             if os.path.exists(output):
