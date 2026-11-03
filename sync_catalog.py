@@ -355,6 +355,7 @@ def main() -> None:
         con.close()
         return
 
+    print("catálogo: baixando indice.txt...", flush=True)
     bases: dict[int, str] = {}
     index_lines = texto("indice.txt").splitlines()
     for line in index_lines:
@@ -405,8 +406,11 @@ def main() -> None:
     if not letters:
         con.close()
         raise RuntimeError("indice.txt não lista letras do catálogo")
-    for letter in letters:
-        for line in texto(f"filmes-{letter}.txt", optional=True).splitlines():
+    print(f"catálogo: {len(letters)} letras encontradas; iniciando feeds de filmes e séries", flush=True)
+    for letter_index, letter in enumerate(letters, start=1):
+        print(f"catálogo: letra {letter_index}/{len(letters)} ({letter})", flush=True)
+        movie_lines = texto(f"filmes-{letter}.txt", optional=True).splitlines()
+        for line in movie_lines:
             if not line.strip():
                 continue
             title, sources = campos(line)
@@ -416,7 +420,8 @@ def main() -> None:
         con.commit()
         time.sleep(max(0, args.pausa))
 
-        for line in texto(f"series-{letter}.txt", optional=True).splitlines():
+        series_lines = texto(f"series-{letter}.txt", optional=True).splitlines()
+        for line in series_lines:
             columns = line.split("\t")
             if len(columns) < 4 or not columns[0].strip():
                 continue
@@ -450,6 +455,7 @@ def main() -> None:
             time.sleep(max(0, args.pausa))
         con.commit()
 
+    print("metadados: baixando fichas.txt e destaques.txt...", flush=True)
     metadata_lines = texto("fichas.txt").splitlines()
     highlight_lines = texto("destaques.txt").splitlines()
     exact_items: dict[tuple[str, str], list[int]] = {}
@@ -504,7 +510,7 @@ def main() -> None:
                         (poster, genres, synopsis, item_id))
             matched_metadata += 1
     print(f"metadados: {matched_metadata} fichas associadas; "
-          f"{metadata_with_poster} linhas com capa de {len(metadata_lines)} linhas")
+          f"{metadata_with_poster} linhas com capa de {len(metadata_lines)} linhas", flush=True)
     if not matched_metadata:
         print("aviso: nenhuma ficha correspondeu ao catálogo; capas não serão baixadas")
     if not _missing_optional_feed:
