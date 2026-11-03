@@ -1,0 +1,24 @@
+services:
+  saimo:
+    build: .
+    container_name: saimo-local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SAIMO_DB: /app/data/catalog.db
+      SAIMO_POSTERS: /app/static/posters
+      SAIMO_DOWNLOAD_DIR: /downloads
+      SAIMO_QUALITY: ${SAIMO_QUALITY:-1080}
+      SAIMO_PARALLEL: ${SAIMO_PARALLEL:-2}
+      SAIMO_SEGMENTOS: ${SAIMO_SEGMENTOS:-8}
+      SAIMO_TOKEN: ${SAIMO_TOKEN:-}
+      SAIMO_CATALOGO: ${SAIMO_CATALOGO:-https://filmes-saimo.pages.dev}
+      SAIMO_PROXY: ${SAIMO_PROXY:-https://saimo-tv.pages.dev}
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./data:/app/data
+      - ./static/posters:/app/static/posters
+      - ${SAIMO_DOWNLOADS_PATH:-./downloads}:/downloads
+    user: "${SAIMO_UID:-1000}:${SAIMO_GID:-1000}"

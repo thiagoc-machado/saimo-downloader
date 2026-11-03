@@ -1,0 +1,8 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+/data/
+/downloads/
+/static/posters/*
+!/static/posters/.gitkeep
