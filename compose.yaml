@@ -16,7 +16,7 @@ services:
       SAIMO_CATALOGO: ${SAIMO_CATALOGO:-https://filmes-saimo.pages.dev}
       SAIMO_PROXY: ${SAIMO_PROXY:-https://saimo-tv.pages.dev}
     ports:
-      - "127.0.0.1:8787:8787"
+      - "8787:8787"
     volumes:
       - ./data:/app/data
       - ./static/posters:/app/static/posters

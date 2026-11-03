@@ -79,6 +79,8 @@ A interface fica em <http://127.0.0.1:8787>. Banco, capas e arquivos baixados fi
 
 Para salvar downloads em outra pasta do servidor, configure `SAIMO_DOWNLOADS_PATH` no `.env`. Por exemplo, `SAIMO_DOWNLOADS_PATH=/mnt/storage/downloads` monta essa pasta do host dentro do container em `/downloads`. Crie a pasta antes de iniciar e dê permissão de escrita ao usuário configurado por `SAIMO_UID` e `SAIMO_GID`.
 
+O Compose publica a porta na rede local usando `8787:8787`. Defina `SAIMO_TOKEN` para proteger o acesso quando a porta estiver disponível na rede.
+
 Para atualizar o catálogo depois:
 
 ```bash
