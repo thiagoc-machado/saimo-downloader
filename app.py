@@ -407,7 +407,8 @@ async def download(req: Request):
         else:
             selected = set()
         title = core.limpar(f"{row['titulo']} ({row['ano']})" if row["ano"] else row["titulo"])
-        directory = os.path.join(core.DESTINO, title)
+        media_folder = "series" if row["tipo"] == "s" else "movies"
+        directory = os.path.join(core.DESTINO, media_folder, title)
         Path(directory).mkdir(parents=True, exist_ok=True)
         created = []
         pending = []

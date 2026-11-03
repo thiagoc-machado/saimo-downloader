@@ -77,7 +77,9 @@ Depois recrie o container com `docker compose up -d --force-recreate`.
 
 A interface fica em <http://127.0.0.1:8787>. Banco, capas e arquivos baixados ficam nas pastas `data/`, `static/posters/` e `downloads/` do projeto. O container inclui `ffmpeg`, necessário para fontes HLS.
 
-Para salvar downloads em outra pasta do servidor, configure `SAIMO_DOWNLOADS_PATH` no `.env`. Por exemplo, `SAIMO_DOWNLOADS_PATH=/mnt/storage/downloads` monta essa pasta do host dentro do container em `/downloads`. Crie a pasta antes de iniciar e dê permissão de escrita ao usuário configurado por `SAIMO_UID` e `SAIMO_GID`.
+Para salvar downloads em outra pasta do servidor, configure `SAIMO_DOWNLOADS_PATH` no `.env`. Por exemplo, `SAIMO_DOWNLOADS_PATH=/mnt/storage/downloads` monta essa pasta do host dentro do container em `/downloads`. Crie a pasta antes de iniciar e dê permissão de escrita ao usuário configurado por `SAIMO_UID` e `SAIMO_GID`. A aplicação separa os arquivos em `/downloads/movies` e `/downloads/series`, visíveis no host como `/mnt/storage/downloads/movies` e `/mnt/storage/downloads/series`.
+
+No Radarr e no Sonarr, mantenha as bibliotecas finais apontando para `/movies` e `/tv`, respectivamente. Os arquivos baixados pelo Saimo ficam na pasta compartilhada `/downloads`; importe-os pelo fluxo de importação manual do Radarr ou Sonarr para que cada programa os organize na biblioteca. O Saimo não se registra como cliente de download nesses programas.
 
 O Compose publica a porta na rede local usando `8787:8787`. Defina `SAIMO_TOKEN` para proteger o acesso quando a porta estiver disponível na rede.
 
