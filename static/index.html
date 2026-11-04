@@ -18,11 +18,13 @@
     .empty{padding:54px 16px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:12px}.more{display:block;margin:22px auto 0;border:1px solid var(--line);background:var(--panel);border-radius:9px;padding:10px 18px}.more:disabled{opacity:.55;cursor:default}
     .download-layout{display:grid;grid-template-columns:minmax(260px,.8fr) minmax(0,1.5fr);gap:26px}.download-layout h3{font-size:15px;margin:0 0 12px}.job-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}.job-heading h3{margin:0}.list-actions{display:flex;flex-wrap:wrap;gap:7px}.list-action{border:1px solid var(--line);border-radius:7px;background:var(--panel2);padding:6px 9px;font-size:11px}.list-action:hover{border-color:var(--accent)}.list-action:disabled{opacity:.5;cursor:wait}.stack{display:flex;flex-direction:column;gap:9px}.job{padding:12px 14px;border:1px solid var(--line);background:var(--panel);border-radius:10px}.job-top{display:flex;justify-content:space-between;gap:12px}.job-name{font-size:13px;font-weight:650;overflow-wrap:anywhere}.job-status{color:var(--muted);font-size:12px;white-space:nowrap}.bar{height:5px;margin-top:10px;background:#303944;border-radius:10px;overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}.bar i.indeterminate{width:28%;animation:bar-progress 1.2s ease-in-out infinite alternate}@keyframes bar-progress{from{transform:translateX(0)}to{transform:translateX(250%)}}.job-error{color:var(--danger)}.job-actions{display:flex;gap:7px;margin-top:10px}.job-action{border:1px solid var(--line);border-radius:7px;background:var(--panel2);padding:5px 9px;font-size:12px}.job-action:hover{border-color:var(--accent)}.job-action.danger:hover{border-color:var(--danger);color:var(--danger)}.job-action:disabled{opacity:.5;cursor:wait}.file-tables{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}.file-table-wrap{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--panel)}.file-table-wrap h3{padding:12px 14px;margin:0;border-bottom:1px solid var(--line)}.file-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}.file-table th,.file-table td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}.file-table th{color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}.file-table tr:last-child td{border-bottom:0}.file-table th:last-child,.file-table td:last-child{width:78px;text-align:right;white-space:nowrap}.file-table a{display:block;color:var(--accent);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-table a:hover{text-decoration:underline}.file-empty{text-align:center!important;color:var(--muted);padding:22px 10px!important}
     .job-metrics{display:flex;flex-wrap:wrap;gap:5px 12px;margin-top:8px;color:var(--muted);font-size:12px}.job-metrics strong{color:var(--text);font-weight:600}.download-summary{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin-top:24px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.summary-stat{min-width:0}.summary-label{display:block;color:var(--muted);font-size:11px}.summary-value{display:block;margin-top:3px;font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    dialog{width:min(570px,calc(100% - 28px));max-height:88vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text)}dialog::backdrop{background:#050709c9;backdrop-filter:blur(3px)}.modal-content{padding:22px}.modal-content h2{font-size:22px;line-height:1.2;margin:0 34px 6px 0}.modal-desc{color:var(--muted);font-size:13px}.synopsis{font-size:14px;line-height:1.6;color:#d8dee5;margin:15px 0}.fields{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:16px 0}.field{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}.field[hidden]{display:none}.field select,.field input{width:auto;max-width:190px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;color:var(--text)}.field input[type=radio]{accent-color:var(--accent)}.versions{display:flex;gap:16px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}.btn{border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:9px 14px}.btn.primary{background:var(--accent);border-color:var(--accent);color:#061613;font-weight:750}.close{position:absolute;right:17px;top:14px;width:34px;height:34px;border:0;border-radius:50%;background:transparent;color:var(--muted);font-size:23px}.close:hover{background:var(--panel2);color:var(--text)}
+    dialog{width:min(850px,calc(100% - 28px));max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text)}dialog::backdrop{background:#050709c9;backdrop-filter:blur(3px)}.modal-content{padding:22px}.modal-content h2{font-size:22px;line-height:1.2;margin:0 34px 6px 0}.modal-desc{color:var(--muted);font-size:13px}.detail-hero{display:grid;grid-template-columns:126px minmax(0,1fr);gap:19px;align-items:start;padding-right:28px}.detail-poster{width:126px;aspect-ratio:2/3;object-fit:cover;border-radius:9px;background:var(--panel2)}.detail-poster[hidden]{display:none}.detail-cast{margin-top:12px;color:var(--muted);font-size:13px;line-height:1.6}.synopsis{font-size:14px;line-height:1.6;color:#d8dee5;margin:15px 0}.detail-section-title{font-size:14px;margin:17px 0 8px}.episode-guide{border-top:1px solid var(--line);padding-top:2px;margin-top:14px}.season-guide{border:1px solid var(--line);border-radius:9px;margin:8px 0;overflow:hidden}.season-guide summary{cursor:pointer;padding:10px 12px;background:var(--panel2);font-size:13px;font-weight:650}.episode-list{padding:4px 12px}.episode-row{display:grid;grid-template-columns:46px minmax(0,1fr);gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}.episode-row:last-child{border-bottom:0}.episode-number{font-weight:700;color:var(--text)}.episode-streams{display:flex;flex-wrap:wrap;gap:5px}.stream-badge{display:inline-flex;padding:2px 7px;border-radius:999px;background:#263c3a;color:var(--accent);font-size:11px}.stream-overview{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.fields{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:16px 0}.field{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}.field[hidden]{display:none}.field select,.field input{width:auto;max-width:190px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;color:var(--text)}.field input[type=radio]{accent-color:var(--accent)}.versions{display:flex;gap:16px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}.btn{border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:9px 14px}.btn.primary{background:var(--accent);border-color:var(--accent);color:#061613;font-weight:750}.close{position:absolute;right:17px;top:14px;width:34px;height:34px;border:0;border-radius:50%;background:transparent;color:var(--muted);font-size:23px}.close:hover{background:var(--panel2);color:var(--text)}
     .notice{color:var(--muted);font-size:13px;margin-top:15px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
     .credits{max-width:1440px;margin:0 auto;padding:14px 22px 24px;display:flex;align-items:center;gap:12px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}.credits img{display:block;width:64px;height:auto}.credits a{line-height:0}
     @media(max-width:950px){.download-summary{grid-template-columns:repeat(4,minmax(0,1fr))}}
     @media(max-width:760px){.toolbar{flex-wrap:wrap;padding:11px 14px;gap:9px}.brand{margin-right:auto}.search{order:3;flex-basis:100%}.select{max-width:none}.grid{grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:11px}main{padding:19px 14px 50px}.download-layout,.file-tables{grid-template-columns:1fr;gap:23px}.download-summary{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:18px}.credits{padding:14px;font-size:11px}.credits img{width:56px}}
+    .detail-hero.without-poster{grid-template-columns:minmax(0,1fr)}
+    @media(max-width:480px){.modal-content{padding:17px}.detail-hero{grid-template-columns:82px minmax(0,1fr);gap:13px;padding-right:20px}.detail-hero.without-poster{grid-template-columns:minmax(0,1fr)}.detail-poster{width:82px}.episode-row{grid-template-columns:38px minmax(0,1fr)}}
   </style>
 </head>
 <body>
@@ -51,7 +53,10 @@
     </section>
   </main>
   <dialog id="details"><button id="close" class="close" aria-label="Fechar">×</button><form id="download-form" class="modal-content">
-    <h2 id="detail-title"></h2><div id="detail-meta" class="modal-desc"></div><p id="synopsis" class="synopsis" hidden></p>
+    <div id="detail-hero" class="detail-hero"><img id="detail-poster" class="detail-poster" alt="" hidden><div><h2 id="detail-title"></h2><div id="detail-meta" class="modal-desc"></div><div id="detail-cast" class="detail-cast" hidden></div></div></div>
+    <p id="synopsis" class="synopsis" hidden></p>
+    <div id="movie-streams" class="stream-overview" hidden></div>
+    <section id="episode-guide" class="episode-guide" hidden><h3 class="detail-section-title">Temporadas, episódios e streams disponíveis</h3><div id="episode-list"></div></section>
     <div id="version-options" class="fields versions"></div><div id="series-options" class="fields" hidden></div>
     <div class="modal-actions"><button id="cancel" class="btn" type="button">Fechar</button><button id="download" class="btn primary" type="submit">Adicionar à fila</button></div>
   </form></dialog>
@@ -117,26 +122,96 @@
       card.addEventListener('click', () => openItem(item.id)); card.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openItem(item.id); } });
       $('#grid').append(card);
     }
+    const parseSources = (value) => {
+      if (typeof value === 'string') { try { return JSON.parse(value); } catch { return []; } }
+      return value;
+    };
+    const versionLabel = (version) => version === 'dub' ? 'Dublado' : version === 'leg' ? 'Legendado' : version;
+    function episodeSources(episode) {
+      const sources = parseSources(episode.fontes);
+      if (Array.isArray(sources)) return sources;
+      return Array.isArray(sources?.[episode.versao]) ? sources[episode.versao] : [];
+    }
+    function providerName(source) {
+      try {
+        const host = new URL(source).hostname.toLowerCase().replace(/^www\./, '');
+        if (host.includes('saimo-tv.pages.dev')) return 'Saimo';
+        if (host.includes('dbonline')) return 'DBOnline';
+        return host;
+      } catch { return 'Fonte'; }
+    }
+    function renderEpisodeGuide(episodes) {
+      const guide = $('#episode-guide'), list = $('#episode-list');
+      list.replaceChildren();
+      const seasons = new Map();
+      for (const episode of episodes || []) {
+        const sources = episodeSources(episode);
+        if (!sources.length) continue;
+        const seasonNumber = Number(episode.temp), episodeNumber = Number(episode.ep);
+        if (!Number.isFinite(seasonNumber) || !Number.isFinite(episodeNumber)) continue;
+        if (!seasons.has(seasonNumber)) seasons.set(seasonNumber, new Map());
+        const season = seasons.get(seasonNumber);
+        if (!season.has(episodeNumber)) season.set(episodeNumber, new Map());
+        season.get(episodeNumber).set(episode.versao, [...new Set(sources.map(providerName))]);
+      }
+      const seasonNumbers = [...seasons.keys()].sort((a,b) => a-b);
+      guide.hidden = !seasonNumbers.length;
+      for (const [seasonIndex, seasonNumber] of seasonNumbers.entries()) {
+        const seasonEpisodes = seasons.get(seasonNumber);
+        const details = document.createElement('details'); details.className = 'season-guide'; details.open = seasonIndex === 0;
+        const summary = document.createElement('summary');
+        const availableVersions = [...new Set([...seasonEpisodes.values()].flatMap(ep => [...ep.keys()]))].map(versionLabel);
+        summary.textContent = `Temporada ${seasonNumber} · ${seasonEpisodes.size} episódios · ${availableVersions.join(' / ')}`;
+        const episodeList = document.createElement('div'); episodeList.className = 'episode-list';
+        for (const [episodeNumber, versions] of [...seasonEpisodes.entries()].sort((a,b) => a[0]-b[0])) {
+          const row = document.createElement('div'); row.className = 'episode-row';
+          const number = document.createElement('span'); number.className = 'episode-number'; number.textContent = `E${String(episodeNumber).padStart(2, '0')}`;
+          const streams = document.createElement('div'); streams.className = 'episode-streams';
+          for (const [version, providers] of versions) {
+            const badge = document.createElement('span'); badge.className = 'stream-badge';
+            badge.textContent = `${versionLabel(version)} · ${providers.join(', ')}`; streams.append(badge);
+          }
+          row.append(number, streams); episodeList.append(row);
+        }
+        details.append(summary, episodeList); list.append(details);
+      }
+    }
+    function renderMovieStreams(fontes) {
+      const box = $('#movie-streams'); box.replaceChildren();
+      const versions = Object.entries(fontes || {}).filter(([, sources]) => Array.isArray(sources) && sources.length);
+      box.hidden = !versions.length;
+      for (const [version, sources] of versions) {
+        const badge = document.createElement('span'); badge.className = 'stream-badge';
+        badge.textContent = `${versionLabel(version)} · ${[...new Set(sources.map(providerName))].join(', ')}`;
+        box.append(badge);
+      }
+    }
     async function openItem(id) {
       try {
         selectedItem = await api(`/api/item/${id}`);
         $('#detail-title').textContent = selectedItem.titulo + (selectedItem.ano ? ` (${selectedItem.ano})` : '');
-        $('#detail-meta').textContent = [selectedItem.generos, selectedItem.tipo === 's' ? 'Série' : 'Filme'].filter(Boolean).join(' · ');
+        $('#detail-meta').textContent = [selectedItem.tipo === 's' ? 'Série' : 'Filme', selectedItem.generos ? `Gêneros: ${selectedItem.generos}` : ''].filter(Boolean).join(' · ');
+        const poster = $('#detail-poster'); poster.hidden = !selectedItem.poster;
+        $('#detail-hero').classList.toggle('without-poster', !selectedItem.poster);
+        if (selectedItem.poster) { poster.src = selectedItem.poster; poster.alt = `Pôster de ${selectedItem.titulo}`; }
+        poster.onerror = () => { poster.hidden = true; $('#detail-hero').classList.add('without-poster'); };
+        const cast = Array.isArray(selectedItem.atores) ? selectedItem.atores : [];
+        $('#detail-cast').textContent = cast.length ? `Elenco: ${cast.join(', ')}` : '';
+        $('#detail-cast').hidden = !cast.length;
         $('#synopsis').textContent = selectedItem.sinopse || ''; $('#synopsis').hidden = !selectedItem.sinopse;
+        renderMovieStreams(selectedItem.fontes || {});
+        renderEpisodeGuide(selectedItem.episodios || []);
         const versions = Object.entries(selectedItem.fontes || {}).filter(([, sources]) => Array.isArray(sources) && sources.length).map(([version]) => version);
         if (selectedItem.tipo === 's') {
           for (const episode of selectedItem.episodios || []) {
-            let sources = episode.fontes;
-            if (typeof sources === 'string') { try { sources = JSON.parse(sources); } catch { sources = []; } }
-            const available = Array.isArray(sources) ? sources.length > 0 : Object.values(sources || {}).some(value => Array.isArray(value) && value.length);
-            if (available && !versions.includes(episode.versao)) versions.push(episode.versao);
+            if (episodeSources(episode).length && !versions.includes(episode.versao)) versions.push(episode.versao);
           }
         }
         const versionBox = $('#version-options'); versionBox.replaceChildren();
         for (const version of versions) {
           const label = document.createElement('label'); label.className = 'field';
           const radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'version'; radio.value = version; radio.required = true; radio.checked = version === versions[0];
-          label.append(radio, document.createTextNode(version === 'dub' ? 'Dublado' : version === 'leg' ? 'Legendado' : version)); versionBox.append(label);
+          label.append(radio, document.createTextNode(versionLabel(version))); versionBox.append(label);
         }
         if (!versions.length) { const note = document.createElement('span'); note.className = 'subtle'; note.textContent = 'Nenhuma versão disponível.'; versionBox.append(note); }
         const seriesBox = $('#series-options'); seriesBox.replaceChildren(); seriesBox.hidden = selectedItem.tipo !== 's';
@@ -147,16 +222,14 @@
           scopeLabel.append(scope);
           const seasonLabel = document.createElement('label'); seasonLabel.className = 'field'; seasonLabel.id = 'season-field'; seasonLabel.append(document.createTextNode('Temporada'));
           const season = document.createElement('select'); season.id = 'season';
-          const episodeHasVersion = (episode, version) => {
-            let sources = episode.fontes;
-            if (typeof sources === 'string') { try { sources = JSON.parse(sources); } catch { sources = []; } }
-            return Array.isArray(sources) ? episode.versao === version && sources.length > 0 : Array.isArray(sources?.[version]) && sources[version].length > 0;
-          };
+          const episodeHasVersion = (episode, version) => episode.versao === version && episodeSources(episode).length > 0;
           const refreshSeasons = () => {
             const version = document.querySelector('input[name="version"]:checked')?.value;
+            const previous = season.value;
             const seasons = [...new Set((selectedItem.episodios || []).filter(ep => episodeHasVersion(ep, version)).map(ep => Number(ep.temp)))].sort((a,b) => a-b);
             season.replaceChildren();
-            for (const number of seasons) { const option = document.createElement('option'); option.value = number; option.textContent = String(number); season.append(option); }
+            for (const number of seasons) { const option = document.createElement('option'); option.value = number; option.textContent = `Temporada ${number}`; season.append(option); }
+            if (seasons.includes(Number(previous))) season.value = previous;
           };
           versionBox.querySelectorAll('input[name="version"]').forEach(radio => radio.addEventListener('change', refreshSeasons));
           refreshSeasons();

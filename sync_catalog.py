@@ -287,6 +287,7 @@ def criar(con: sqlite3.Connection) -> None:
       titulo_norm TEXT NOT NULL, ano TEXT NOT NULL DEFAULT '', letra TEXT,
       pedaco INTEGER DEFAULT 0, poster TEXT, generos TEXT DEFAULT '',
       sinopse TEXT DEFAULT '', fontes TEXT DEFAULT '{}', eps INTEGER DEFAULT 0,
+      tmdb_id INTEGER, atores TEXT DEFAULT '',
       destaque INTEGER DEFAULT 0, UNIQUE(tipo, titulo, ano));
     CREATE TABLE IF NOT EXISTS episodes(
       item_id INTEGER NOT NULL, temp INTEGER NOT NULL, ep INTEGER NOT NULL,
@@ -303,6 +304,11 @@ def criar(con: sqlite3.Connection) -> None:
     CREATE INDEX IF NOT EXISTS ix_tipo ON items(tipo, letra);
     CREATE INDEX IF NOT EXISTS ix_episode_item ON episodes(item_id, temp, ep);
     """)
+    columns = {row[1] for row in con.execute("PRAGMA table_info(items)")}
+    if "tmdb_id" not in columns:
+        con.execute("ALTER TABLE items ADD COLUMN tmdb_id INTEGER")
+    if "atores" not in columns:
+        con.execute("ALTER TABLE items ADD COLUMN atores TEXT DEFAULT ''")
 
 
 def upsert(con: sqlite3.Connection, tipo: str, titulo: str, letra: str,
@@ -514,7 +520,7 @@ def main() -> None:
                 poster = str(record.get("poster", record.get("capa", record.get("poster_path", "")))).strip()
                 if poster.casefold() in {"none", "null"}:
                     poster = ""
-                columns = [kind, title, "", poster,
+                columns = [kind, title, str(record.get("tmdb_id", record.get("id", ""))), poster,
                            str(record.get("generos", record.get("genres", ""))),
                            str(record.get("sinopse", record.get("overview", "")))]
             except (AttributeError, TypeError, ValueError):
@@ -526,12 +532,16 @@ def main() -> None:
         kind, title = columns[0].strip(), columns[1].strip()
         poster = campo_poster(columns)
         item_type = tipo_catalogo(kind)
-        if not title or not poster or not item_type:
+        if not title or not item_type:
             continue
-        metadata_with_poster += 1
+        if poster:
+            metadata_with_poster += 1
         genres = columns[4].strip() if len(columns) > 4 else ""
         synopsis = columns[5].strip() if len(columns) > 5 else ""
-        if not poster.lower().startswith(("http://", "https://")):
+        tmdb_id = columns[2].strip() if len(columns) > 2 and columns[2].strip().isdigit() else None
+        if not poster and not genres and not synopsis and not tmdb_id:
+            continue
+        if poster and not poster.lower().startswith(("http://", "https://")):
             poster = "https://image.tmdb.org/t/p/w342/" + poster.lstrip("/")
         item_ids = exact_items.get((item_type, title.casefold()))
         if not item_ids:
@@ -543,8 +553,12 @@ def main() -> None:
             if len(candidates) == 1:
                 item_ids = [candidates[0][1]]
         for item_id in item_ids:
-            con.execute("UPDATE items SET poster=?, generos=?, sinopse=? WHERE id=?",
-                        (poster, genres, synopsis, item_id))
+            con.execute("""UPDATE items SET
+                poster=CASE WHEN ?='' THEN poster ELSE ? END,
+                generos=CASE WHEN ?='' THEN generos ELSE ? END,
+                sinopse=CASE WHEN ?='' THEN sinopse ELSE ? END,
+                tmdb_id=COALESCE(?,tmdb_id) WHERE id=?""",
+                (poster, poster, genres, genres, synopsis, synopsis, tmdb_id, item_id))
             matched_metadata += 1
     print(f"metadados: {matched_metadata} fichas associadas; "
           f"{metadata_with_poster} linhas com capa de {len(metadata_lines)} linhas", flush=True)

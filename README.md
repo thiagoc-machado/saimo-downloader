@@ -96,6 +96,8 @@ docker compose up -d --build
 docker compose exec saimo python sync_catalog.py --imagens --tmdb-fallback
 ```
 
+As fichas do catálogo também guardam o ID TMDb. Com `SAIMO_TMDB_TOKEN` ou `SAIMO_TMDB_API_KEY` configurado, ao abrir os detalhes de um título a aplicação busca e armazena em cache resumo, gêneros, pôster e elenco quando esses dados estiverem faltando.
+
 Se o catálogo já estiver sincronizado, processe somente as capas para evitar refazer a sincronização completa:
 
 ```bash
@@ -118,7 +120,7 @@ docker compose down
 ## Uso
 
 - A busca aceita título e filtro por filmes ou séries.
-- Clique em um título para escolher dublado/legendado. Para séries, escolha a temporada e episódios (`primeiro`, `todos`, `1,3,5` ou `1-3`).
+- Clique em um título para ver pôster, gêneros, resumo, elenco e versões/fontes disponíveis. Para séries, a janela lista temporadas e episódios com fontes, e permite escolher a temporada e episódios (`primeiro`, `todos`, `1,3,5` ou `1-3`).
 - A aba **Downloads** mostra o percentual, a velocidade e a estimativa de término dos downloads, além de um resumo de velocidades e estados da fila. Arquivos concluídos aparecem separados entre filmes e séries.
 - Na fila, use **Pausar**, **Retomar** e **Cancelar e apagar dados** para controlar cada job.
 - **Limpar completos** oculta da fila os jobs concluídos sem apagar os vídeos nem a marca de download no catálogo. **Limpar lista** pede confirmação, oculta o histórico e remove jobs em fila ou pausados; downloads ativos e arquivos completos são preservados.

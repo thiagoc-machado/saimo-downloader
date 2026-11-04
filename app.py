@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
 
+import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -25,6 +26,8 @@ import saimo_core as core
 load_dotenv()
 DB = Path(os.getenv("SAIMO_DB", "./data/catalog.db")).expanduser().resolve()
 TOKEN = os.getenv("SAIMO_TOKEN", "")
+TMDB_TOKEN = os.getenv("SAIMO_TMDB_TOKEN", "").strip()
+TMDB_API_KEY = os.getenv("SAIMO_TMDB_API_KEY", "").strip()
 PARALELO = max(1, min(8, int(os.getenv("SAIMO_PARALLEL", "2"))))
 POSTERS = Path(os.getenv("SAIMO_POSTERS", "./static/posters")).expanduser().resolve()
 DB.parent.mkdir(parents=True, exist_ok=True)
@@ -116,6 +119,7 @@ def preparar_armazenamento() -> None:
           titulo_norm TEXT NOT NULL, ano TEXT NOT NULL DEFAULT '', letra TEXT,
           pedaco INTEGER DEFAULT 0, poster TEXT, generos TEXT DEFAULT '',
           sinopse TEXT DEFAULT '', fontes TEXT DEFAULT '{}', eps INTEGER DEFAULT 0,
+          tmdb_id INTEGER, atores TEXT DEFAULT '',
           destaque INTEGER DEFAULT 0, UNIQUE(tipo, titulo, ano));
         CREATE TABLE IF NOT EXISTS episodes(
           item_id INTEGER NOT NULL, temp INTEGER NOT NULL, ep INTEGER NOT NULL,
@@ -125,6 +129,11 @@ def preparar_armazenamento() -> None:
         CREATE INDEX IF NOT EXISTS ix_tipo ON items(tipo, letra);
         CREATE INDEX IF NOT EXISTS ix_episode_item ON episodes(item_id, temp, ep);
         """)
+        item_columns = {row[1] for row in con.execute("PRAGMA table_info(items)")}
+        if "tmdb_id" not in item_columns:
+            con.execute("ALTER TABLE items ADD COLUMN tmdb_id INTEGER")
+        if "atores" not in item_columns:
+            con.execute("ALTER TABLE items ADD COLUMN atores TEXT DEFAULT ''")
         con.execute("""CREATE TABLE IF NOT EXISTS jobs(
             id INTEGER PRIMARY KEY, titulo TEXT NOT NULL, arquivo TEXT, status TEXT NOT NULL,
             pct REAL DEFAULT 0, erro TEXT, criado TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -351,6 +360,50 @@ def items(req: Request, q: str = "", tipo: str = "", pagina: int = 0, limite: in
             "catalogo_sincronizado": catalog_count > 0}
 
 
+def enriquecer_detalhes_tmdb(result: dict) -> dict:
+    """Busca e guarda detalhes e elenco do TMDb sob demanda, usando o ID das fichas."""
+    tmdb_id = result.get("tmdb_id")
+    if not tmdb_id or result.get("atores") or not (TMDB_TOKEN or TMDB_API_KEY):
+        return result
+    media_type = "tv" if result.get("tipo") == "s" else "movie"
+    params = {"language": "pt-BR", "append_to_response": "credits"}
+    headers = {"accept": "application/json"}
+    if TMDB_TOKEN:
+        headers["Authorization"] = f"Bearer {TMDB_TOKEN}"
+    else:
+        params["api_key"] = TMDB_API_KEY
+    try:
+        response = requests.get(
+            f"https://api.themoviedb.org/3/{media_type}/{int(tmdb_id)}",
+            params=params, headers=headers, timeout=(4, 10))
+        if response.status_code in (401, 403, 404):
+            return result
+        response.raise_for_status()
+        details = response.json()
+        cast = [person.get("name", "").strip()
+                for person in (details.get("credits") or {}).get("cast", [])[:12]
+                if isinstance(person, dict) and person.get("name")]
+        genres = ", ".join(genre.get("name", "") for genre in details.get("genres", [])
+                            if genre.get("name"))
+        overview = str(details.get("overview") or "").strip()
+        poster_path = str(details.get("poster_path") or "").strip()
+        poster = f"https://image.tmdb.org/t/p/w500/{poster_path.lstrip('/')}" if poster_path else ""
+        with session() as con:
+            con.execute("""UPDATE items SET
+                generos=CASE WHEN generos IS NULL OR generos='' THEN ? ELSE generos END,
+                sinopse=CASE WHEN sinopse IS NULL OR sinopse='' THEN ? ELSE sinopse END,
+                poster=CASE WHEN poster IS NULL OR poster='' THEN ? ELSE poster END,
+                atores=? WHERE id=?""",
+                (genres, overview, poster, json.dumps(cast, ensure_ascii=False), result["id"]))
+        result["generos"] = result.get("generos") or genres
+        result["sinopse"] = result.get("sinopse") or overview
+        result["poster"] = result.get("poster") or poster
+        result["atores"] = cast
+    except (requests.RequestException, ValueError, TypeError, AttributeError):
+        return result
+    return result
+
+
 @app.get("/api/item/{item_id}")
 def item(req: Request, item_id: int):
     checar(req)
@@ -361,7 +414,7 @@ def item(req: Request, item_id: int):
         episodes = [dict(ep) for ep in con.execute(
             "SELECT temp,ep,versao,fontes FROM episodes WHERE item_id=? ORDER BY temp,ep,versao",
             (item_id,))]
-    result = dict(row)
+    result = enriquecer_detalhes_tmdb(dict(row))
     try:
         result["fontes"] = json.loads(result.get("fontes") or "{}")
     except (TypeError, ValueError):
@@ -372,6 +425,13 @@ def item(req: Request, item_id: int):
         except (TypeError, ValueError):
             episode["fontes"] = []
     result["episodios"] = episodes
+    actors = result.get("atores")
+    if isinstance(actors, str):
+        try:
+            actors = json.loads(actors or "[]")
+        except ValueError:
+            actors = []
+    result["atores"] = actors if isinstance(actors, list) else []
     return result
 
 
