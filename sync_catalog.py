@@ -401,7 +401,7 @@ def main() -> None:
         item_id INTEGER, temp INTEGER, ep INTEGER, versao TEXT,
         PRIMARY KEY(item_id,temp,ep,versao))""")
     con.execute("DELETE FROM _sync_episodes")
-    series_parts: dict[tuple[str, int], list[str]] = {}
+    series_parts: dict[tuple[str, int], list[tuple[str, str, list[str]]]] = {}
 
     letters = [line.split("\t", 1)[0].strip() for line in index_lines
                if line and not line.startswith(("base:", "#")) and "\t" in line]
@@ -436,10 +436,45 @@ def main() -> None:
             con.execute("INSERT OR IGNORE INTO _sync_items VALUES(?)", (item_id,))
             part_key = (letter, part)
             if part_key not in series_parts:
-                series_parts[part_key] = texto(f"series-{letter}-{part}.txt").splitlines()
-            for raw_episode in series_parts[part_key]:
-                if raw_episode.startswith("@") or not raw_episode.strip():
-                    continue
+                raw_lines = texto(f"series-{letter}-{part}.txt").splitlines()
+                sections: list[tuple[str, str, list[str]]] = []
+                current_title = current_year = None
+                current_episodes: list[str] = []
+                for raw_line in raw_lines:
+                    if raw_line.startswith("@"):
+                        if current_title is not None:
+                            sections.append((current_title, current_year or "", current_episodes))
+                        marker = raw_line[1:].split("\t")
+                        current_title = marker[0].strip()
+                        current_year = marker[1].strip() if len(marker) > 1 else ""
+                        current_episodes = []
+                    elif current_title is not None and raw_line.strip():
+                        current_episodes.append(raw_line)
+                if current_title is not None:
+                    sections.append((current_title, current_year or "", current_episodes))
+                series_parts[part_key] = sections
+
+            title_key = normalizar_titulo(title)
+            matches = []
+            for section_title, section_year, section_episodes in series_parts[part_key]:
+                section_key = normalizar_titulo(section_title)
+                trailing_year = re.search(r"\s+((?:19|20)\d{2})$", section_title)
+                title_matches = section_key == title_key or (
+                    trailing_year and normalizar_titulo(section_title[:trailing_year.start()]) == title_key
+                )
+                year_matches = not year or not section_year or year == section_year
+                if trailing_year and year and trailing_year.group(1) != year:
+                    year_matches = False
+                if title_matches and year_matches:
+                    matches.append((section_title, section_year, section_episodes))
+
+            if len(matches) != 1:
+                reason = "nenhuma seção correspondente" if not matches else "seção ambígua"
+                print(f"série: {reason} para {title!r} ({year or 'sem ano'}), "
+                      f"arquivo series-{letter}-{part}.txt; episódios ignorados", flush=True)
+                continue
+
+            for raw_episode in matches[0][2]:
                 fields = raw_episode.split("\t")
                 if len(fields) < 4 or not fields[0].isdigit() or not fields[1].isdigit():
                     continue
