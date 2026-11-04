@@ -67,6 +67,21 @@ def limpar_dados_job(output_base: str) -> None:
         pass
 
 
+def limpar_progresso_job(output_base: str) -> None:
+    """Remove apenas temporários de um job pausado, preservando arquivos finais."""
+    base = Path(output_base).resolve()
+    root = Path(core.DESTINO).resolve()
+    if not base.is_relative_to(root):
+        return
+    final = Path(str(base) + ".mp4")
+    Path(str(final) + ".part").unlink(missing_ok=True)
+    shutil.rmtree(Path(str(final) + ".segs"), ignore_errors=True)
+    try:
+        base.parent.rmdir()
+    except OSError:
+        pass
+
+
 def db() -> sqlite3.Connection:
     con = sqlite3.connect(DB, timeout=30, check_same_thread=False)
     con.row_factory = sqlite3.Row
@@ -113,10 +128,20 @@ def preparar_armazenamento() -> None:
         con.execute("""CREATE TABLE IF NOT EXISTS jobs(
             id INTEGER PRIMARY KEY, titulo TEXT NOT NULL, arquivo TEXT, status TEXT NOT NULL,
             pct REAL DEFAULT 0, erro TEXT, criado TEXT DEFAULT CURRENT_TIMESTAMP,
-            task_json TEXT)""")
+            task_json TEXT, bytes_done INTEGER DEFAULT 0, bytes_total INTEGER DEFAULT 0,
+            item_id INTEGER, hidden INTEGER DEFAULT 0)""")
         columns = {row[1] for row in con.execute("PRAGMA table_info(jobs)")}
         if "task_json" not in columns:
             con.execute("ALTER TABLE jobs ADD COLUMN task_json TEXT")
+        if "bytes_done" not in columns:
+            con.execute("ALTER TABLE jobs ADD COLUMN bytes_done INTEGER DEFAULT 0")
+        if "bytes_total" not in columns:
+            con.execute("ALTER TABLE jobs ADD COLUMN bytes_total INTEGER DEFAULT 0")
+        if "item_id" not in columns:
+            con.execute("ALTER TABLE jobs ADD COLUMN item_id INTEGER")
+        if "hidden" not in columns:
+            con.execute("ALTER TABLE jobs ADD COLUMN hidden INTEGER DEFAULT 0")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_jobs_item_status ON jobs(item_id,status)")
         has_items = con.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='items'").fetchone()
         if has_items:
@@ -147,7 +172,8 @@ def preparar_armazenamento() -> None:
                 SEARCH_FTS = False
 
         pending = con.execute("SELECT id,titulo,status,task_json FROM jobs "
-                              "WHERE status IN ('fila','resolvendo','baixando','pausando','pausado','cancelando')").fetchall()
+                              "WHERE hidden=0 AND status IN "
+                              "('fila','resolvendo','baixando','pausando','pausado','cancelando')").fetchall()
         for row in pending:
             try:
                 payload = json.loads(row["task_json"] or "")
@@ -226,20 +252,23 @@ def worker() -> None:
                 con.commit()
                 continue
 
-            last_progress = {"time": 0.0, "bytes": -1.0}
+            last_progress = {"time": 0.0, "units": -1.0}
 
-            def progress(done: int, total: int) -> None:
+            def progress(done: int, total: int, bytes_done: int | None = None,
+                         bytes_total: int | None = None) -> None:
                 control.checkpoint()
                 percent = min(99.9, done / total * 100) if total else 0
                 with progress_lock:
                     now = time.monotonic()
                     final_update = total > 0 and done >= total
-                    if not final_update and done - last_progress["bytes"] < (1 << 20) and now - last_progress["time"] < 0.5:
+                    if not final_update and done - last_progress["units"] < (1 << 20) and now - last_progress["time"] < 0.5:
                         return
-                    con.execute("UPDATE jobs SET pct=?, status='baixando' WHERE id=?", (percent, job_id))
+                    con.execute("UPDATE jobs SET pct=?,status='baixando',bytes_done=?,bytes_total=? WHERE id=?",
+                                (percent, done if bytes_done is None else bytes_done,
+                                 total if bytes_total is None else bytes_total, job_id))
                     con.commit()
                     last_progress["time"] = now
-                    last_progress["bytes"] = done
+                    last_progress["units"] = done
 
             result = core.baixar(resolved, output_base, progress, control)
             with controle_lock:
@@ -309,7 +338,11 @@ def items(req: Request, q: str = "", tipo: str = "", pagina: int = 0, limite: in
     where = " AND ".join(conditions)
     with session() as con:
         rows = [dict(row) for row in con.execute(
-            f"SELECT id,tipo,titulo,ano,poster,generos,eps,destaque FROM items WHERE {where} "
+            f"SELECT id,tipo,titulo,ano,poster,generos,eps,destaque,"
+            "(SELECT COUNT(*) FROM jobs j WHERE j.item_id=items.id AND j.status='concluido') AS baixados,"
+            "(SELECT COUNT(*) FROM jobs j WHERE j.item_id=items.id AND j.status IN "
+            "('resolvendo','baixando','pausando','cancelando')) AS downloads_ativos "
+            f"FROM items WHERE {where} "
             "ORDER BY destaque DESC, titulo COLLATE NOCASE LIMIT ? OFFSET ?",
             values + [limite, pagina * limite])]
         total = con.execute(f"SELECT COUNT(*) FROM items WHERE {where}", values).fetchone()[0]
@@ -423,8 +456,8 @@ async def download(req: Request):
             job_title = f"{row['titulo']} [{version}]"
             output_base = os.path.join(directory, f"{title} [{version}]")
             task_json = json.dumps({"sources": sources, "output_base": output_base})
-            cursor = con.execute("INSERT INTO jobs(titulo,status,task_json) VALUES(?, 'fila', ?)",
-                                 (job_title, task_json))
+            cursor = con.execute("INSERT INTO jobs(titulo,status,task_json,item_id) VALUES(?, 'fila', ?, ?)",
+                                 (job_title, task_json, item_id))
             job_id = cursor.lastrowid
             pending.append((job_id, job_title, sources, output_base))
             created.append(job_id)
@@ -440,8 +473,8 @@ async def download(req: Request):
                 episode_title = f"{title} S{episode['temp']:02d}E{episode['ep']:02d} [{version}]"
                 output_base = os.path.join(directory, episode_title)
                 task_json = json.dumps({"sources": sources, "output_base": output_base})
-                cursor = con.execute("INSERT INTO jobs(titulo,status,task_json) VALUES(?, 'fila', ?)",
-                                     (episode_title, task_json))
+                cursor = con.execute("INSERT INTO jobs(titulo,status,task_json,item_id) VALUES(?, 'fila', ?, ?)",
+                                     (episode_title, task_json, item_id))
                 job_id = cursor.lastrowid
                 pending.append((job_id, episode_title, sources, output_base))
                 created.append(job_id)
@@ -457,8 +490,15 @@ async def download(req: Request):
 def jobs(req: Request):
     checar(req)
     with session() as con:
-        rows = [dict(row) for row in con.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT 80")]
-    return {"jobs": rows}
+        rows = [dict(row) for row in con.execute(
+            "SELECT * FROM jobs WHERE hidden=0 ORDER BY CASE status "
+            "WHEN 'baixando' THEN 0 WHEN 'resolvendo' THEN 1 WHEN 'pausando' THEN 2 "
+            "WHEN 'cancelando' THEN 3 WHEN 'fila' THEN 4 WHEN 'pausado' THEN 5 "
+            "WHEN 'erro' THEN 6 WHEN 'concluido' THEN 7 WHEN 'cancelado' THEN 8 ELSE 9 END, "
+            "id DESC LIMIT 80")]
+        counts = {row["status"]: row["total"] for row in
+                  con.execute("SELECT status,COUNT(*) AS total FROM jobs WHERE hidden=0 GROUP BY status")}
+    return {"jobs": rows, "counts": counts}
 
 
 @app.post("/api/jobs/{job_id}/pause")
@@ -554,6 +594,54 @@ def delete_job(req: Request, job_id: int):
             raise HTTPException(409, "não é possível apagar um download em andamento")
         con.execute("DELETE FROM jobs WHERE id=?", (job_id,))
     return {"ok": True}
+
+
+@app.post("/api/jobs/clear")
+async def clear_jobs(req: Request):
+    checar(req)
+    try:
+        body = await req.json()
+        scope = body.get("scope")
+    except (ValueError, AttributeError):
+        raise HTTPException(400, "escopo inválido")
+    if scope not in ("completed", "list"):
+        raise HTTPException(400, "escopo inválido")
+
+    temporary_paths = []
+    active_statuses = ("resolvendo", "baixando", "pausando", "cancelando")
+    with controle_lock:
+        with session() as con:
+            if scope == "completed":
+                rows = con.execute("SELECT id FROM jobs WHERE hidden=0 AND status='concluido'").fetchall()
+            else:
+                rows = con.execute(
+                    "SELECT id,status,task_json FROM jobs WHERE hidden=0 AND status IN "
+                    "('fila','pausado','concluido','erro','cancelado')").fetchall()
+                for row in rows:
+                    if row["status"] == "pausado":
+                        try:
+                            temporary_paths.append(json.loads(row["task_json"] or "")["output_base"])
+                        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                            pass
+            ids = [int(row["id"]) for row in rows]
+            if ids:
+                con.executemany(
+                    "UPDATE jobs SET hidden=1,status=CASE WHEN status IN ('fila','pausado') "
+                    "THEN 'cancelado' ELSE status END,pct=CASE WHEN status IN ('fila','pausado') "
+                    "THEN 0 ELSE pct END WHERE id=?", [(job_id,) for job_id in ids])
+
+    for output_base in temporary_paths:
+        limpar_progresso_job(output_base)
+    remaining = _contagens_jobs() if scope == "list" else {}
+    return {"ok": True, "limpos": len(ids),
+            "ativos_preservados": sum(count for status, count in remaining.items()
+                                      if status in active_statuses)}
+
+
+def _contagens_jobs() -> dict[str, int]:
+    with session() as con:
+        return {row["status"]: row["total"] for row in
+                con.execute("SELECT status,COUNT(*) AS total FROM jobs WHERE hidden=0 GROUP BY status")}
 
 
 @app.get("/api/arquivos")

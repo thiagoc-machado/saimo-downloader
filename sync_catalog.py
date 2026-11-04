@@ -294,7 +294,9 @@ def criar(con: sqlite3.Connection) -> None:
       PRIMARY KEY(item_id, temp, ep, versao));
     CREATE TABLE IF NOT EXISTS jobs(
       id INTEGER PRIMARY KEY, titulo TEXT NOT NULL, arquivo TEXT, status TEXT NOT NULL,
-      pct REAL DEFAULT 0, erro TEXT, criado TEXT DEFAULT CURRENT_TIMESTAMP);
+      pct REAL DEFAULT 0, erro TEXT, criado TEXT DEFAULT CURRENT_TIMESTAMP,
+      task_json TEXT, bytes_done INTEGER DEFAULT 0, bytes_total INTEGER DEFAULT 0,
+      item_id INTEGER, hidden INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS tmdb_poster_cache(
       chave TEXT PRIMARY KEY, poster TEXT NOT NULL DEFAULT '', atualizado TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE INDEX IF NOT EXISTS ix_busca ON items(titulo_norm);

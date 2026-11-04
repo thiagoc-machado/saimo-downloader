@@ -116,6 +116,35 @@ def usar_proxy(url: str) -> bool:
     return path.endswith((".txt", ".m3u8")) or "dadinhodetapioca.fun" in low
 
 
+def get_fonte(url: str, referer: str | None = None, stream: bool = False,
+              cookies=None, extra_headers: dict[str, str] | None = None):
+    """Tenta a fonte original primeiro; usa o proxy como fallback para fontes bloqueadas."""
+    targets = [url]
+    if usar_proxy(url):
+        proxied = prox(url, referer)
+        if proxied != url:
+            targets.append(proxied)
+    errors = []
+    for target in targets:
+        try:
+            response = get(target, referer=referer, stream=stream, cookies=cookies,
+                           extra_headers=extra_headers)
+            if stream:
+                content_type = response.headers.get("Content-Type", "").lower()
+                if content_type.startswith("text/") or "application/json" in content_type:
+                    response.close()
+                    raise RuntimeError("a fonte retornou uma página, não mídia")
+                return response
+            if urlparse(url).path.lower().endswith((".txt", ".m3u8")):
+                content = response.lower() if isinstance(response, str) else ""
+                if "<html" in content[:2048] or "<!doctype html" in content[:2048]:
+                    raise RuntimeError("a fonte retornou uma página HTML, não uma playlist")
+            return response
+        except RuntimeError as exc:
+            errors.append(str(exc))
+    raise RuntimeError("; ".join(errors[-2:]) or "falha ao acessar a fonte")
+
+
 def referer_de(url: str) -> str | None:
     return REF_EMBED if "embedplayer2.xyz" in url else None
 
@@ -195,18 +224,17 @@ def escolher_variante(master: str, qualidade: int) -> str | None:
 
 def baixar_mp4(url: str, destino: str, cb=None, referer: str | None = None,
                control: DownloadControl | None = None) -> None:
-    target = prox(url, referer) if usar_proxy(url) else url
     temporary = destino + ".part"
     offset = os.path.getsize(temporary) if os.path.exists(temporary) else 0
     headers = {"Range": f"bytes={offset}-"} if offset else {}
     if control:
         control.checkpoint()
     try:
-        response = get(target, referer=referer, stream=True, extra_headers=headers)
+        response = get_fonte(url, referer=referer, stream=True, extra_headers=headers)
         if offset and response.status_code != 206:
             response.close()
             offset = 0
-            response = get(target, referer=referer, stream=True)
+            response = get_fonte(url, referer=referer, stream=True)
         with response, open(temporary, "ab" if offset else "wb") as output:
             length = int(response.headers.get("Content-Length") or 0)
             total = offset + length if length else 0
@@ -233,15 +261,14 @@ def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = Non
     from concurrent.futures import ThreadPoolExecutor
 
     ref = referer or referer_de(master_url)
-    master_target = prox(master_url, ref) if usar_proxy(master_url) else master_url
-    master = get(master_target, referer=ref)
+    master = get_fonte(master_url, referer=ref)
     playlist_url = master_url
     if "#EXT-X-STREAM-INF" in master:
         variant = escolher_variante(master, QUALIDADE)
         if not variant:
             raise RuntimeError("master sem variantes")
         playlist_url = urljoin(master_url, variant)
-        playlist = get(prox(playlist_url, ref) if usar_proxy(playlist_url) else playlist_url, referer=ref)
+        playlist = get_fonte(playlist_url, referer=ref)
     else:
         playlist = master
     segment_cookies = session().cookies.copy()
@@ -259,18 +286,18 @@ def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = Non
     os.makedirs(folder, exist_ok=True)
 
     completed = 0
+    downloaded_bytes = 0
     completed_lock = threading.Lock()
 
     def download_segment(item):
-        nonlocal completed
+        nonlocal completed, downloaded_bytes
         index, segment_url = item
         if control:
             control.checkpoint()
         path = os.path.join(folder, f"{index:06d}.ts")
         if not (os.path.exists(path) and os.path.getsize(path)):
-            segment_target = prox(segment_url, ref) if usar_proxy(segment_url) else segment_url
             temporary = path + ".part"
-            with get(segment_target, referer=ref, stream=True, cookies=segment_cookies) as response, open(temporary, "wb") as output:
+            with get_fonte(segment_url, referer=ref, stream=True, cookies=segment_cookies) as response, open(temporary, "wb") as output:
                 for chunk in response.iter_content(CHUNK):
                     if control:
                         control.checkpoint()
@@ -280,7 +307,8 @@ def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = Non
         if cb:
             with completed_lock:
                 completed += 1
-                cb(completed, len(segments))
+                downloaded_bytes += os.path.getsize(path)
+                cb(completed, len(segments), downloaded_bytes, 0)
         return path
 
     try:

@@ -119,8 +119,9 @@ docker compose down
 
 - A busca aceita título e filtro por filmes ou séries.
 - Clique em um título para escolher dublado/legendado. Para séries, escolha a temporada e episódios (`primeiro`, `todos`, `1,3,5` ou `1-3`).
-- A aba **Downloads** mostra o estado dos jobs e os arquivos encontrados na pasta de destino.
+- A aba **Downloads** mostra o percentual, a velocidade e a estimativa de término dos downloads, além de um resumo de velocidades e estados da fila. Arquivos concluídos aparecem separados entre filmes e séries.
 - Na fila, use **Pausar**, **Retomar** e **Cancelar e apagar dados** para controlar cada job.
+- **Limpar completos** oculta da fila os jobs concluídos sem apagar os vídeos nem a marca de download no catálogo. **Limpar lista** pede confirmação, oculta o histórico e remove jobs em fila ou pausados; downloads ativos e arquivos completos são preservados.
 - A pasta de destino é carregada ao iniciar o servidor. Reinicie o processo para aplicar uma mudança no `.env`.
 - A API de documentação fica em <http://127.0.0.1:8787/docs>.
 
