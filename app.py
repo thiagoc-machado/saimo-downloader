@@ -185,6 +185,9 @@ def preparar_armazenamento() -> None:
                               "('fila','resolvendo','baixando','pausando','pausado','cancelando')").fetchall()
         for row in pending:
             try:
+                if row["status"] in ("pausado", "pausando"):
+                    con.execute("UPDATE jobs SET status='pausado',erro=NULL WHERE id=?", (row["id"],))
+                    continue
                 payload = json.loads(row["task_json"] or "")
                 task = (int(row["id"]), row["titulo"], payload["sources"], payload["output_base"])
                 if row["status"] == "cancelando":
@@ -350,7 +353,8 @@ def items(req: Request, q: str = "", tipo: str = "", pagina: int = 0, limite: in
             f"SELECT id,tipo,titulo,ano,poster,generos,eps,destaque,"
             "(SELECT COUNT(*) FROM jobs j WHERE j.item_id=items.id AND j.status='concluido') AS baixados,"
             "(SELECT COUNT(*) FROM jobs j WHERE j.item_id=items.id AND j.status IN "
-            "('resolvendo','baixando','pausando','cancelando')) AS downloads_ativos "
+            "('resolvendo','baixando','pausando','cancelando')) AS downloads_ativos,"
+            "(SELECT COUNT(*) FROM jobs j WHERE j.item_id=items.id AND j.status IN ('fila','pausado')) AS downloads_fila "
             f"FROM items WHERE {where} "
             "ORDER BY destaque DESC, titulo COLLATE NOCASE LIMIT ? OFFSET ?",
             values + [limite, pagina * limite])]
@@ -358,6 +362,29 @@ def items(req: Request, q: str = "", tipo: str = "", pagina: int = 0, limite: in
         catalog_count = con.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     return {"items": rows, "total": total, "pagina": pagina,
             "catalogo_sincronizado": catalog_count > 0}
+
+
+@app.get("/api/items/status")
+def item_status(req: Request, ids: str = ""):
+    checar(req)
+    try:
+        item_ids = list(dict.fromkeys(int(value) for value in ids.split(",") if value.strip()))
+    except ValueError:
+        raise HTTPException(400, "ids deve conter números separados por vírgula")
+    if not item_ids:
+        return {"items": []}
+    if len(item_ids) > 500:
+        raise HTTPException(400, "limite de 500 títulos por consulta")
+    placeholders = ",".join("?" for _ in item_ids)
+    with session() as con:
+        rows = [dict(row) for row in con.execute(
+            f"SELECT i.id,i.tipo,"
+            "SUM(CASE WHEN j.status='concluido' THEN 1 ELSE 0 END) AS baixados,"
+            "SUM(CASE WHEN j.status IN ('resolvendo','baixando','pausando','cancelando') THEN 1 ELSE 0 END) AS downloads_ativos,"
+            "SUM(CASE WHEN j.status IN ('fila','pausado') THEN 1 ELSE 0 END) AS downloads_fila "
+            f"FROM items i LEFT JOIN jobs j ON j.item_id=i.id WHERE i.id IN ({placeholders}) GROUP BY i.id,i.tipo",
+            item_ids)]
+    return {"items": rows}
 
 
 def enriquecer_detalhes_tmdb(result: dict) -> dict:
@@ -559,6 +586,57 @@ def jobs(req: Request):
         counts = {row["status"]: row["total"] for row in
                   con.execute("SELECT status,COUNT(*) AS total FROM jobs WHERE hidden=0 GROUP BY status")}
     return {"jobs": rows, "counts": counts}
+
+
+@app.post("/api/jobs/pause-all")
+def pause_all_jobs(req: Request):
+    checar(req)
+    pausing = 0
+    paused = 0
+    with controle_lock:
+        with session() as con:
+            rows = con.execute(
+                "SELECT id,status FROM jobs WHERE hidden=0 AND status IN ('fila','resolvendo','baixando')"
+            ).fetchall()
+            for row in rows:
+                job_id, status = int(row["id"]), row["status"]
+                if status == "fila":
+                    con.execute("UPDATE jobs SET status='pausado' WHERE id=?", (job_id,))
+                    paused += 1
+                    continue
+                control = controles.get(job_id)
+                if control:
+                    control.pause()
+                    con.execute("UPDATE jobs SET status='pausando' WHERE id=?", (job_id,))
+                    pausing += 1
+                else:
+                    con.execute("UPDATE jobs SET status='pausado' WHERE id=?", (job_id,))
+                    paused += 1
+    return {"ok": True, "pausados": paused, "pausando": pausing}
+
+
+@app.post("/api/jobs/resume-all")
+def resume_all_jobs(req: Request):
+    checar(req)
+    tasks = []
+    errors = 0
+    with session() as con:
+        rows = con.execute(
+            "SELECT id,titulo,task_json FROM jobs WHERE hidden=0 AND status='pausado' ORDER BY id"
+        ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row["task_json"] or "")
+                task = (int(row["id"]), row["titulo"], payload["sources"], payload["output_base"])
+                con.execute("UPDATE jobs SET status='fila',erro=NULL WHERE id=?", (row["id"],))
+                tasks.append(task)
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                con.execute("UPDATE jobs SET status='erro',erro=? WHERE id=?",
+                            ("dados do download não permitem retomada", row["id"]))
+                errors += 1
+    for task in tasks:
+        enfileirar(task)
+    return {"ok": True, "retomados": len(tasks), "erros": errors}
 
 
 @app.post("/api/jobs/{job_id}/pause")
