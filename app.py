@@ -575,18 +575,29 @@ async def download(req: Request):
 
 
 @app.get("/api/jobs")
-def jobs(req: Request):
+def jobs(req: Request, pagina: int = 0, limite: int = 25):
     checar(req)
+    pagina = max(0, pagina)
+    limite = max(1, min(100, limite))
     with session() as con:
+        total = con.execute(
+            "SELECT COUNT(*) FROM jobs WHERE hidden=0 AND status!='concluido'"
+        ).fetchone()[0]
+        paginas = (total + limite - 1) // limite
+        pagina = min(pagina, max(0, paginas - 1))
         rows = [dict(row) for row in con.execute(
             "SELECT * FROM jobs WHERE hidden=0 AND status!='concluido' ORDER BY CASE status "
             "WHEN 'baixando' THEN 0 WHEN 'resolvendo' THEN 1 WHEN 'pausando' THEN 2 "
             "WHEN 'cancelando' THEN 3 WHEN 'fila' THEN 4 WHEN 'pausado' THEN 5 "
             "WHEN 'erro' THEN 6 WHEN 'cancelado' THEN 7 ELSE 8 END, "
-            "id DESC LIMIT 80")]
+            "id DESC LIMIT ? OFFSET ?", (limite, pagina * limite))]
+        active_rows = [dict(row) for row in con.execute(
+            "SELECT * FROM jobs WHERE hidden=0 AND status IN "
+            "('resolvendo','baixando','pausando','cancelando') ORDER BY id DESC")]
         counts = {row["status"]: row["total"] for row in
                   con.execute("SELECT status,COUNT(*) AS total FROM jobs WHERE hidden=0 GROUP BY status")}
-    return {"jobs": rows, "counts": counts}
+    return {"jobs": rows, "ativos": active_rows, "counts": counts, "total": total, "pagina": pagina,
+            "limite": limite, "paginas": paginas}
 
 
 @app.get("/api/jobs/completed")
