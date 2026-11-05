@@ -151,6 +151,7 @@ def preparar_armazenamento() -> None:
         if "hidden" not in columns:
             con.execute("ALTER TABLE jobs ADD COLUMN hidden INTEGER DEFAULT 0")
         con.execute("CREATE INDEX IF NOT EXISTS ix_jobs_item_status ON jobs(item_id,status)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_jobs_hidden_status_id ON jobs(hidden,status,id DESC)")
         has_items = con.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='items'").fetchone()
         if has_items:
@@ -578,14 +579,42 @@ def jobs(req: Request):
     checar(req)
     with session() as con:
         rows = [dict(row) for row in con.execute(
-            "SELECT * FROM jobs WHERE hidden=0 ORDER BY CASE status "
+            "SELECT * FROM jobs WHERE hidden=0 AND status!='concluido' ORDER BY CASE status "
             "WHEN 'baixando' THEN 0 WHEN 'resolvendo' THEN 1 WHEN 'pausando' THEN 2 "
             "WHEN 'cancelando' THEN 3 WHEN 'fila' THEN 4 WHEN 'pausado' THEN 5 "
-            "WHEN 'erro' THEN 6 WHEN 'concluido' THEN 7 WHEN 'cancelado' THEN 8 ELSE 9 END, "
+            "WHEN 'erro' THEN 6 WHEN 'cancelado' THEN 7 ELSE 8 END, "
             "id DESC LIMIT 80")]
         counts = {row["status"]: row["total"] for row in
                   con.execute("SELECT status,COUNT(*) AS total FROM jobs WHERE hidden=0 GROUP BY status")}
     return {"jobs": rows, "counts": counts}
+
+
+@app.get("/api/jobs/completed")
+def completed_jobs(req: Request, pagina: int = 0, limite: int = 25):
+    checar(req)
+    pagina = max(0, pagina)
+    limite = max(1, min(50, limite))
+    with session() as con:
+        total = con.execute(
+            "SELECT COUNT(*) FROM jobs WHERE hidden=0 AND status='concluido'").fetchone()[0]
+        paginas = (total + limite - 1) // limite
+        pagina = min(pagina, max(0, paginas - 1))
+        rows = [dict(row) for row in con.execute(
+            "SELECT id,titulo,arquivo,criado FROM jobs "
+            "WHERE hidden=0 AND status='concluido' ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limite, pagina * limite))]
+    return {"jobs": rows, "total": total, "pagina": pagina,
+            "limite": limite, "paginas": paginas}
+
+
+@app.get("/api/storage")
+def storage(req: Request):
+    checar(req)
+    usage = shutil.disk_usage(core.DESTINO)
+    used = usage.total - usage.free
+    percent_used = (used / usage.total * 100) if usage.total else 0
+    return {"pasta": core.DESTINO, "total": usage.total, "usado": used,
+            "livre": usage.free, "percentual_usado": round(percent_used, 1)}
 
 
 @app.post("/api/jobs/pause-all")
@@ -683,6 +712,34 @@ def resume_job(req: Request, job_id: int):
         con.execute("UPDATE jobs SET status='fila',erro=NULL WHERE id=?", (job_id,))
     if task:
         enfileirar(task)
+    return {"ok": True, "status": "fila"}
+
+
+@app.post("/api/jobs/{job_id}/retry")
+def retry_job(req: Request, job_id: int):
+    checar(req)
+    task = None
+    with session() as con:
+        row = con.execute("SELECT titulo,status,task_json FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "download não encontrado")
+        if row["status"] != "erro":
+            raise HTTPException(409, "só é possível tentar novamente downloads com erro")
+        try:
+            payload = json.loads(row["task_json"] or "")
+            sources = payload["sources"]
+            output_base = payload["output_base"]
+            if not isinstance(sources, list) or not sources or not isinstance(output_base, str):
+                raise ValueError("payload inválido")
+            task = (job_id, row["titulo"], sources, output_base)
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+            raise HTTPException(409, "dados do download não permitem nova tentativa")
+        updated = con.execute(
+            "UPDATE jobs SET status='fila',pct=0,erro=NULL,bytes_done=0,bytes_total=0,arquivo=NULL "
+            "WHERE id=? AND status='erro'", (job_id,)).rowcount
+        if not updated:
+            raise HTTPException(409, "o download mudou de estado; atualize a lista")
+    enfileirar(task)
     return {"ok": True, "status": "fila"}
 
 

@@ -21,6 +21,7 @@
     dialog{width:min(850px,calc(100% - 28px));max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text)}dialog::backdrop{background:#050709c9;backdrop-filter:blur(3px)}.modal-content{padding:22px}.modal-content h2{font-size:22px;line-height:1.2;margin:0 34px 6px 0}.modal-desc{color:var(--muted);font-size:13px}.detail-hero{display:grid;grid-template-columns:126px minmax(0,1fr);gap:19px;align-items:start;padding-right:28px}.detail-poster{width:126px;aspect-ratio:2/3;object-fit:cover;border-radius:9px;background:var(--panel2)}.detail-poster[hidden]{display:none}.detail-cast{margin-top:12px;color:var(--muted);font-size:13px;line-height:1.6}.synopsis{font-size:14px;line-height:1.6;color:#d8dee5;margin:15px 0}.detail-section-title{font-size:14px;margin:17px 0 8px}.episode-guide{border-top:1px solid var(--line);padding-top:2px;margin-top:14px}.season-guide{border:1px solid var(--line);border-radius:9px;margin:8px 0;overflow:hidden}.season-guide summary{cursor:pointer;padding:10px 12px;background:var(--panel2);font-size:13px;font-weight:650}.episode-list{padding:4px 12px}.episode-row{display:grid;grid-template-columns:46px minmax(0,1fr);gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}.episode-row:last-child{border-bottom:0}.episode-number{font-weight:700;color:var(--text)}.episode-streams{display:flex;flex-wrap:wrap;gap:5px}.stream-badge{display:inline-flex;padding:2px 7px;border-radius:999px;background:#263c3a;color:var(--accent);font-size:11px}.stream-overview{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.fields{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:16px 0}.field{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}.field[hidden]{display:none}.field select,.field input{width:auto;max-width:190px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;color:var(--text)}.field input[type=radio]{accent-color:var(--accent)}.versions{display:flex;gap:16px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}.btn{border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:9px 14px}.btn.primary{background:var(--accent);border-color:var(--accent);color:#061613;font-weight:750}.close{position:absolute;right:17px;top:14px;width:34px;height:34px;border:0;border-radius:50%;background:transparent;color:var(--muted);font-size:23px}.close:hover{background:var(--panel2);color:var(--text)}
     .notice{color:var(--muted);font-size:13px;margin-top:15px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
     .toast{position:fixed;right:20px;bottom:20px;z-index:20;max-width:min(440px,calc(100% - 32px));padding:12px 16px;border:1px solid #39786f;border-radius:10px;background:#19312e;color:#cafff5;box-shadow:0 8px 28px #0008}.toast[hidden]{display:none}
+    .completed-panel,.storage-panel{margin-top:20px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.completed-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.completed-heading h3,.storage-heading{margin:0;font-size:14px}.completed-list{max-height:360px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:9px}.completed-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:12px}.completed-row:last-child{border-bottom:0}.completed-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.completed-date{flex:none;color:var(--muted);font-size:11px}.completed-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px}.storage-values{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px 14px;margin:9px 0;color:var(--muted);font-size:12px}.storage-values strong{color:var(--text);font-weight:650}.storage-bar{height:9px;overflow:hidden;border-radius:99px;background:#303944}.storage-bar-fill{height:100%;width:0;background:var(--accent);transition:width .3s}
     .credits{max-width:1440px;margin:0 auto;padding:14px 22px 24px;display:flex;align-items:center;gap:12px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}.credits img{display:block;width:64px;height:auto}.credits a{line-height:0}
     @media(max-width:950px){.download-summary{grid-template-columns:repeat(4,minmax(0,1fr))}}
     @media(max-width:760px){.toolbar{flex-wrap:wrap;padding:11px 14px;gap:9px}.brand{margin-right:auto}.search{order:3;flex-basis:100%}.select{max-width:none}.grid{grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:11px}main{padding:19px 14px 50px}.download-layout,.file-tables{grid-template-columns:1fr;gap:23px}.download-summary{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:18px}.credits{padding:14px;font-size:11px}.credits img{width:56px}}
@@ -46,11 +47,21 @@
     </section>
     <section id="downloads-section" hidden>
       <div class="heading"><div><h2>Downloads</h2><div id="destination" class="subtle"></div></div></div>
-      <div class="download-layout"><div><div class="job-heading"><h3>Fila</h3><div class="list-actions"><button id="pause-all" class="list-action" type="button">Pausar tudo</button><button id="resume-all" class="list-action" type="button">Retomar tudo</button><button id="clear-completed" class="list-action" type="button">Limpar completos</button><button id="clear-list" class="list-action" type="button">Limpar lista</button></div></div><div id="jobs" class="stack"></div></div><div class="file-tables">
+      <div class="download-layout"><div><div class="job-heading"><h3>Fila</h3><div class="list-actions"><button id="pause-all" class="list-action" type="button">Pausar tudo</button><button id="resume-all" class="list-action" type="button">Retomar tudo</button><button id="clear-list" class="list-action" type="button">Limpar lista</button></div></div><div id="jobs" class="stack"></div></div><div class="file-tables">
         <section class="file-table-wrap"><h3>Filmes</h3><table class="file-table"><thead><tr><th>Arquivo</th><th>Tamanho</th></tr></thead><tbody id="movie-files"></tbody></table></section>
         <section class="file-table-wrap"><h3>Séries</h3><table class="file-table"><thead><tr><th>Arquivo</th><th>Tamanho</th></tr></thead><tbody id="series-files"></tbody></table></section>
       </div></div>
+      <section class="completed-panel" aria-labelledby="completed-heading">
+        <div class="completed-heading"><h3 id="completed-heading">Concluídos</h3><button id="clear-completed" class="list-action" type="button">Limpar completos</button></div>
+        <div id="completed-list" class="completed-list" aria-live="polite"></div>
+        <div class="completed-pager"><button id="completed-prev" class="list-action" type="button">Anterior</button><span id="completed-page" class="subtle">Carregando…</span><button id="completed-next" class="list-action" type="button">Próxima</button></div>
+      </section>
       <div id="download-summary" class="download-summary" aria-live="polite"></div>
+      <section class="storage-panel" aria-labelledby="storage-heading">
+        <h3 id="storage-heading" class="storage-heading">Armazenamento do disco de downloads</h3>
+        <div class="storage-values"><span>Total: <strong id="storage-total">—</strong></span><span>Usado: <strong id="storage-used">—</strong></span><span>Livre: <strong id="storage-free">—</strong></span><span id="storage-percent">—</span></div>
+        <div class="storage-bar" role="progressbar" aria-label="Espaço usado no disco de downloads" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="storage-bar-fill" class="storage-bar-fill"></div></div>
+      </section>
     </section>
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
@@ -73,6 +84,7 @@
     let token = localStorage.getItem('saimo-token') || '';
     let page = 0, total = 0, loading = false, queryGeneration = 0, selectedItem = null, searchTimer;
     let refreshingDownloads = false, lastFilesRefresh = 0, destinationLoaded = false;
+    let completedPage = 0, completedTotal = -1, completedRefreshing = false, lastStorageRefresh = 0;
     const progressSamples = new Map();
     const headers = () => token ? {'x-token': token} : {};
     async function api(url, options = {}) {
@@ -335,6 +347,42 @@
       const summary=$('#download-summary');summary.replaceChildren();
       for(const [label,value] of values){const stat=document.createElement('div');stat.className='summary-stat';const name=document.createElement('span');name.className='summary-label';name.textContent=label;const amount=document.createElement('span');amount.className='summary-value';amount.textContent=value;stat.append(name,amount);summary.append(stat);}
     }
+    function renderStorage(storage) {
+      const total=Number(storage.total)||0,used=Number(storage.usado)||0,free=Number(storage.livre)||0;
+      const percent=total?Math.max(0,Math.min(100,used/total*100)):0;
+      $('#storage-total').textContent=formatBytes(total);
+      $('#storage-used').textContent=formatBytes(used);
+      $('#storage-free').textContent=formatBytes(free);
+      $('#storage-percent').textContent=`${percent.toFixed(1)}% usado · ${(100-percent).toFixed(1)}% livre`;
+      $('#storage-bar-fill').style.width=`${percent}%`;
+      $('.storage-bar').setAttribute('aria-valuenow',percent.toFixed(1));
+      $('.storage-bar').setAttribute('aria-valuetext',`${formatBytes(free)} livres de ${formatBytes(total)}`);
+    }
+    async function loadCompletedJobs(page=completedPage) {
+      if(completedRefreshing)return;
+      completedRefreshing=true;
+      $('#completed-prev').disabled=true;$('#completed-next').disabled=true;
+      try {
+        const result=await api(`/api/jobs/completed?pagina=${Math.max(0,page)}&limite=25`);
+        completedPage=Number(result.pagina)||0;completedTotal=Number(result.total)||0;
+        const list=$('#completed-list');list.replaceChildren();
+        if(!result.jobs.length){const empty=document.createElement('div');empty.className='file-empty';empty.textContent='Nenhum download concluído.';list.append(empty);}
+        for(const job of result.jobs){
+          const row=document.createElement('div');row.className='completed-row';
+          const title=document.createElement('span');title.className='completed-title';title.textContent=job.titulo;title.title=job.titulo;
+          const created=document.createElement('time');created.className='completed-date';created.textContent=job.criado||'';
+          if(job.criado)created.dateTime=job.criado;
+          row.append(title,created);list.append(row);
+        }
+        const pages=Number(result.paginas)||0;
+        $('#completed-page').textContent=completedTotal?`Página ${completedPage+1} de ${pages} · ${completedTotal.toLocaleString('pt-BR')} concluídos`:'0 concluídos';
+        $('#completed-prev').disabled=completedPage<=0;
+        $('#completed-next').disabled=completedPage+1>=pages;
+      } catch(error) {
+        const list=$('#completed-list');list.replaceChildren();const message=document.createElement('div');message.className='file-empty';message.textContent=`Não foi possível carregar concluídos: ${error.message}`;list.append(message);
+        $('#completed-page').textContent='Erro ao carregar';
+      } finally { completedRefreshing=false; }
+    }
     async function refreshDownloads() {
       if (refreshingDownloads) return;
       refreshingDownloads = true;
@@ -344,12 +392,14 @@
         const tasks = [];
         if (!destinationLoaded) tasks.push(api('/api/config').then(config => { $('#destination').textContent = `Pasta: ${config.pasta}`; destinationLoaded = true; }));
         if (!lastFilesRefresh || now - lastFilesRefresh > 15000) tasks.push(api('/api/arquivos').then(data => { renderFiles(data.arquivos); lastFilesRefresh = Date.now(); }));
+        if (now-lastStorageRefresh>30000) tasks.push(api('/api/storage').then(data => { renderStorage(data); lastStorageRefresh=Date.now(); }));
         await Promise.all(tasks);
+        if(completedTotal!==Number(jobData.counts?.concluido||0))await loadCompletedJobs(completedPage);
         const jobs = $('#jobs'); jobs.replaceChildren();
         let totalSpeed=0;const jobMetrics=new Map();
         for(const job of jobData.jobs){const metric=measureJob(job,now);jobMetrics.set(Number(job.id),metric);totalSpeed+=metric.speed;}
         renderSummary(jobData.counts||{},totalSpeed);
-        if (!jobData.jobs.length) { const empty = document.createElement('div'); empty.className='empty'; empty.textContent='A fila está vazia.'; jobs.append(empty); }
+        if (!jobData.jobs.length) { const empty = document.createElement('div'); empty.className='empty'; empty.textContent='Não há downloads pendentes, com erro ou cancelados.'; jobs.append(empty); }
         for (const job of jobData.jobs) {
           const card = document.createElement('div'); card.className='job';
           const top=document.createElement('div');top.className='job-top';const name=document.createElement('div');name.className='job-name';name.textContent=job.titulo;const status=document.createElement('div');status.className='job-status';status.textContent=job.erro ? `Erro: ${job.erro}` : job.status; if(job.status==='erro') status.classList.add('job-error');top.append(name,status);
@@ -363,9 +413,10 @@
           for(const text of [progressText,`Velocidade: ${metricText}`,`Término: ${metric.eta}`]){const part=document.createElement('span');part.textContent=text;details.append(part);}
           card.append(top,bar,details);
           const actions=document.createElement('div');actions.className='job-actions';
-          const addAction=(label,action,danger=false)=>{const button=document.createElement('button');button.type='button';button.className=`job-action${danger?' danger':''}`;button.textContent=label;button.addEventListener('click',async()=>{button.disabled=true;try{await api(`/api/jobs/${job.id}/${action}`,{method:'POST'});await refreshDownloads();}catch(error){alert(error.message);button.disabled=false;}});actions.append(button);};
+          const addAction=(label,action,danger=false)=>{const button=document.createElement('button');button.type='button';button.className=`job-action${danger?' danger':''}`;button.textContent=label;button.addEventListener('click',async()=>{button.disabled=true;try{await api(`/api/jobs/${job.id}/${action}`,{method:'POST'});await refreshDownloads();if(action==='retry')showToast('Nova tentativa adicionada à fila.');}catch(error){alert(error.message);button.disabled=false;}});actions.append(button);};
           if(['fila','resolvendo','baixando'].includes(job.status)) addAction('Pausar','pause');
           if(job.status==='pausado') addAction('Retomar','resume');
+          if(job.status==='erro') addAction('Tentar novamente','retry');
           if(['fila','resolvendo','baixando','pausando','pausado','cancelando'].includes(job.status)) addAction('Cancelar e apagar dados','cancel',true);
           if(actions.childElementCount) card.append(actions);jobs.append(card);
         }
@@ -407,6 +458,8 @@
     $('#clear-list').addEventListener('click',event=>clearJobs('list',event.currentTarget));
     $('#pause-all').addEventListener('click',event=>bulkJobAction('pause-all',event.currentTarget));
     $('#resume-all').addEventListener('click',event=>bulkJobAction('resume-all',event.currentTarget));
+    $('#completed-prev').addEventListener('click',()=>loadCompletedJobs(completedPage-1));
+    $('#completed-next').addEventListener('click',()=>loadCompletedJobs(completedPage+1));
     $('#kind').addEventListener('change', resetCatalog); $('#more').addEventListener('click', loadPage);
     $('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer=setTimeout(resetCatalog,300); });
     $('#close').addEventListener('click', () => $('#details').close()); $('#cancel').addEventListener('click', () => $('#details').close());
