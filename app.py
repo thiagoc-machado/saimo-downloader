@@ -529,8 +529,7 @@ async def download(req: Request):
             selected = set()
         title = core.limpar(f"{row['titulo']} ({row['ano']})" if row["ano"] else row["titulo"])
         media_folder = "series" if row["tipo"] == "s" else "movies"
-        directory = os.path.join(core.DESTINO, media_folder, title)
-        Path(directory).mkdir(parents=True, exist_ok=True)
+        media_root = os.path.join(core.DESTINO, media_folder)
         created = []
         pending = []
         if row["tipo"] == "f":
@@ -542,6 +541,8 @@ async def download(req: Request):
             if not sources:
                 raise HTTPException(400, "sem fonte nesta versão")
             job_title = f"{row['titulo']} [{version}]"
+            directory = os.path.join(media_root, title)
+            Path(directory).mkdir(parents=True, exist_ok=True)
             output_base = os.path.join(directory, f"{title} [{version}]")
             task_json = json.dumps({"sources": sources, "output_base": output_base})
             cursor = con.execute("INSERT INTO jobs(titulo,status,task_json,item_id) VALUES(?, 'fila', ?, ?)",
@@ -559,7 +560,10 @@ async def download(req: Request):
                 if not sources:
                     continue
                 episode_title = f"{title} S{episode['temp']:02d}E{episode['ep']:02d} [{version}]"
-                output_base = os.path.join(directory, episode_title)
+                season_directory = os.path.join(media_root, title, f"Season {episode['temp']:02d}")
+                Path(season_directory).mkdir(parents=True, exist_ok=True)
+                file_title = f"{title} - S{episode['temp']:02d}E{episode['ep']:02d} [{version}]"
+                output_base = os.path.join(season_directory, file_title)
                 task_json = json.dumps({"sources": sources, "output_base": output_base})
                 cursor = con.execute("INSERT INTO jobs(titulo,status,task_json,item_id) VALUES(?, 'fila', ?, ?)",
                                      (episode_title, task_json, item_id))
@@ -673,6 +677,37 @@ def resume_all_jobs(req: Request):
             except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                 con.execute("UPDATE jobs SET status='erro',erro=? WHERE id=?",
                             ("dados do download não permitem retomada", row["id"]))
+                errors += 1
+    for task in tasks:
+        enfileirar(task)
+    return {"ok": True, "retomados": len(tasks), "erros": errors}
+
+
+@app.post("/api/jobs/retry-all")
+def retry_all_jobs(req: Request):
+    checar(req)
+    tasks = []
+    errors = 0
+    with session() as con:
+        rows = con.execute(
+            "SELECT id,titulo,task_json FROM jobs "
+            "WHERE hidden=0 AND status='erro' ORDER BY id"
+        ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row["task_json"] or "")
+                sources = payload["sources"]
+                output_base = payload["output_base"]
+                if not isinstance(sources, list) or not sources or not isinstance(output_base, str):
+                    raise ValueError("payload inválido")
+                job_id = int(row["id"])
+                updated = con.execute(
+                    "UPDATE jobs SET status='fila',pct=0,erro=NULL,bytes_done=0,bytes_total=0,arquivo=NULL "
+                    "WHERE id=? AND status='erro'", (job_id,)
+                ).rowcount
+                if updated:
+                    tasks.append((job_id, row["titulo"], sources, output_base))
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                 errors += 1
     for task in tasks:
         enfileirar(task)
