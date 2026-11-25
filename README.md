@@ -14,7 +14,8 @@ Aplicação local em Python para sincronizar o catálogo configurado para SQLite
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+if [ ! -f .env ]; then cp .env.example .env; fi
+python -m playwright install chromium
 ```
 
 Edite `.env` para escolher a pasta de destino e, se necessário, ajustar os endereços do catálogo e do proxy. Os caminhos relativos são resolvidos a partir da pasta do projeto.
@@ -30,9 +31,14 @@ SAIMO_TOKEN=
 SAIMO_CATALOGO=https://filmes-saimo.pages.dev
 SAIMO_PROXY=https://saimo-tv.pages.dev
 SAIMO_TMDB_TOKEN=
+SAIMO_TMDB_API_KEY=
+SAIMO_EN_MAX_H=1080
+SAIMO_OPENSUBTITLES_API_KEY=
 ```
 
-Sincronize o catálogo. A opção `--imagens` salva cópias locais das capas para que a grade não dependa das imagens remotas.
+Para baixar via fontes HLS, instale `ffmpeg` no sistema. Para testar a aba **EN**, configure `SAIMO_TMDB_TOKEN` ou `SAIMO_TMDB_API_KEY` no `.env`; a chave `SAIMO_OPENSUBTITLES_API_KEY` é opcional e habilita a busca de legendas PT-BR.
+
+Sincronize o catálogo PT se quiser carregar essa aba também. A opção `--imagens` salva cópias locais das capas para que a grade não dependa das imagens remotas.
 
 ```bash
 python sync_catalog.py --imagens
@@ -41,31 +47,33 @@ python sync_catalog.py --imagens
 Inicie a aplicação:
 
 ```bash
+mkdir -p data downloads static/posters
 uvicorn app:app --host 127.0.0.1 --port 8787
 ```
 
-Abra <http://127.0.0.1:8787>. Para acessar a partir de outros dispositivos na rede, use `--host 0.0.0.0` e configure `SAIMO_TOKEN` antes de iniciar o servidor.
+Abra <http://127.0.0.1:8787>, selecione **EN** e clique em **Atualizar catálogo EN**. O progresso aparece na própria aba; depois, abra um título e escolha **Original (EN)** para criar um download. Encerre o servidor com `Ctrl+C`. Para acessar a partir de outros dispositivos na rede, use `--host 0.0.0.0` e configure `SAIMO_TOKEN` antes de iniciar o servidor.
 
 ## Executar com Docker Compose
 
-Instale Docker Engine com o plugin Compose, crie o arquivo `.env` e ajuste os IDs do usuário para que os arquivos gravados nas pastas montadas pertençam à sua conta:
+Instale Docker Engine com o plugin Compose. Crie `.env` somente se ainda não existir e ajuste os IDs do usuário para que os arquivos gravados nas pastas montadas pertençam à sua conta:
 
 ```bash
-cp .env.example .env
+if [ ! -f .env ]; then cp .env.example .env; fi
 id -u
 id -g
 ```
 
-Preencha `SAIMO_UID` e `SAIMO_GID` no `.env` com os valores mostrados acima. Depois, construa a imagem e sincronize o catálogo:
+Preencha `SAIMO_UID` e `SAIMO_GID` no `.env` com os valores mostrados acima. Para testar somente o catálogo EN, configure também `SAIMO_TMDB_TOKEN` ou `SAIMO_TMDB_API_KEY`. Depois, construa a imagem e inicie o servidor:
 
 ```bash
 mkdir -p data downloads static/posters
 docker compose build
-docker compose run --rm saimo python sync_catalog.py --imagens
 docker compose up -d
 ```
 
-Se o servidor já estiver iniciado antes da primeira sincronização, execute o comando de sincronização abaixo. O servidor permanece ativo e a busca passa a exibir os itens após a conclusão.
+Abra <http://127.0.0.1:8787>, selecione **EN** e clique em **Atualizar catálogo EN**. Não é necessário sincronizar o catálogo PT para testar essa aba. Para carregar também o catálogo PT antes de iniciar a aplicação, rode `docker compose run --rm saimo python sync_catalog.py --imagens` entre `build` e `up -d`.
+
+A sincronização do catálogo PT é opcional para testar a aba EN. Para carregar ou atualizar o catálogo PT depois de iniciar o servidor, use o comando da seção “Para atualizar o catálogo depois”.
 
 Se o log mostrar `sqlite3.OperationalError: unable to open database file`, confira se `data/`, `downloads/` e `static/posters/` pertencem ao mesmo UID/GID configurado no Compose. Para corrigir pastas existentes:
 
@@ -77,7 +85,7 @@ Depois recrie o container com `docker compose up -d --force-recreate`.
 
 A interface fica em <http://127.0.0.1:8787>. Banco, capas e arquivos baixados ficam nas pastas `data/`, `static/posters/` e `downloads/` do projeto. O container inclui `ffmpeg`, necessário para fontes HLS.
 
-Para salvar downloads em outra pasta do servidor, configure `SAIMO_DOWNLOADS_PATH` no `.env`. Por exemplo, `SAIMO_DOWNLOADS_PATH=/mnt/storage` monta essa pasta do host dentro do container em `/downloads`. Crie a pasta antes de iniciar e dê permissão de escrita ao usuário configurado por `SAIMO_UID` e `SAIMO_GID`. Filmes são organizados como `/downloads/movies/Título (Ano)/Título (Ano) [dub].mp4`; séries, como `/downloads/series/Série/Season 01/Série - S01E01 [dub].mp4`. A versão de áudio fica no nome do arquivo (`[dub]` ou `[leg]`).
+Para salvar downloads em outra pasta do servidor, configure `SAIMO_DOWNLOADS_PATH` no `.env`. Por exemplo, `SAIMO_DOWNLOADS_PATH=/mnt/storage` monta essa pasta do host dentro do container em `/downloads`. Crie a pasta antes de iniciar e dê permissão de escrita ao usuário configurado por `SAIMO_UID` e `SAIMO_GID`. Filmes são organizados como `/downloads/movies/Título (Ano)/Título (Ano) [dub].mp4`; séries, como `/downloads/series/Série/Season 01/Série - S01E01 [dub].mp4`. A versão de áudio fica no nome do arquivo (`[dub]`, `[leg]` ou `[orig]`).
 
 No Radarr e no Sonarr, mantenha as bibliotecas finais apontando para `/movies` e `/tv`, respectivamente. Os arquivos baixados pelo Saimo ficam na pasta compartilhada `/downloads`; importe-os pelo fluxo de importação manual do Radarr ou Sonarr para que cada programa os organize na biblioteca. O Saimo não se registra como cliente de download nesses programas.
 
@@ -120,6 +128,7 @@ docker compose down
 ## Uso
 
 - A busca aceita título e filtro por filmes ou séries.
+- A aba **EN** consulta e sincroniza separadamente títulos com áudio original em inglês. Configure `SAIMO_TMDB_TOKEN` ou `SAIMO_TMDB_API_KEY`; os detalhes TMDb ficam em cache por 24 horas. Para busca de legendas PT-BR, configure `SAIMO_OPENSUBTITLES_API_KEY`; sem ela, o vídeo baixa normalmente e o job indica que a legenda não foi consultada. A imagem Docker também instala yt-dlp e Chromium para os resolvedores EN.
 - Clique em um título para ver pôster, gêneros, resumo, elenco e versões/fontes disponíveis. Para séries, a janela lista temporadas e episódios com fontes, e permite escolher a temporada e episódios (`primeiro`, `todos`, `1,3,5` ou `1-3`).
 - A aba **Downloads** mostra o percentual, a velocidade e a estimativa de término dos downloads, além de um resumo de velocidades e estados da fila. Arquivos concluídos aparecem separados entre filmes e séries.
 - Na fila, use **Pausar**, **Retomar** e **Cancelar e apagar dados** para controlar cada job.

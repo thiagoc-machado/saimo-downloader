@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import saimo_core as core
+import saimo_en
 
 load_dotenv()
 DB = Path(os.getenv("SAIMO_DB", "./data/catalog.db")).expanduser().resolve()
@@ -44,6 +45,9 @@ fila_lock = threading.Lock()
 catalog_sync_lock = threading.Lock()
 catalog_sync_cancel = threading.Event()
 catalog_sync_thread: threading.Thread | None = None
+catalog_sync_lock_en = threading.Lock()
+catalog_sync_cancel_en = threading.Event()
+catalog_sync_thread_en: threading.Thread | None = None
 ALPHA_VARIANTS = {
     "A": "aáàâãäåāăą", "C": "cçćč", "E": "eéèêëēĕėęě",
     "I": "iíìîïīĭįı", "N": "nñńňņ", "O": "oóòôõöøōŏő",
@@ -158,6 +162,8 @@ def preparar_armazenamento() -> None:
         CREATE INDEX IF NOT EXISTS ix_episode_item ON episodes(item_id, temp, ep);
         """)
         item_columns = {row[1] for row in con.execute("PRAGMA table_info(items)")}
+        if "idioma" not in item_columns:
+            con.execute("ALTER TABLE items ADD COLUMN idioma TEXT DEFAULT 'pt'")
         if "tmdb_id" not in item_columns:
             con.execute("ALTER TABLE items ADD COLUMN tmdb_id INTEGER")
         if "atores" not in item_columns:
@@ -166,7 +172,7 @@ def preparar_armazenamento() -> None:
             id INTEGER PRIMARY KEY, titulo TEXT NOT NULL, arquivo TEXT, status TEXT NOT NULL,
             pct REAL DEFAULT 0, erro TEXT, criado TEXT DEFAULT CURRENT_TIMESTAMP,
             task_json TEXT, bytes_done INTEGER DEFAULT 0, bytes_total INTEGER DEFAULT 0,
-            item_id INTEGER, hidden INTEGER DEFAULT 0)""")
+            item_id INTEGER, hidden INTEGER DEFAULT 0, aviso TEXT)""")
         columns = {row[1] for row in con.execute("PRAGMA table_info(jobs)")}
         if "task_json" not in columns:
             con.execute("ALTER TABLE jobs ADD COLUMN task_json TEXT")
@@ -178,6 +184,8 @@ def preparar_armazenamento() -> None:
             con.execute("ALTER TABLE jobs ADD COLUMN item_id INTEGER")
         if "hidden" not in columns:
             con.execute("ALTER TABLE jobs ADD COLUMN hidden INTEGER DEFAULT 0")
+        if "aviso" not in columns:
+            con.execute("ALTER TABLE jobs ADD COLUMN aviso TEXT")
         con.execute("CREATE INDEX IF NOT EXISTS ix_jobs_item_status ON jobs(item_id,status)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_jobs_hidden_status_id ON jobs(hidden,status,id DESC)")
         con.executescript("""
@@ -200,6 +208,15 @@ def preparar_armazenamento() -> None:
           temp INTEGER, ep INTEGER, versao TEXT);
         CREATE INDEX IF NOT EXISTS ix_catalog_changes_type ON catalog_sync_changes(tipo,item_id);
         UPDATE catalog_sync_status SET status='interrompido',fase='Interrompido',
+          atual='A aplicação foi reiniciada durante a atualização',finalizado=CURRENT_TIMESTAMP
+          WHERE status='executando';
+        CREATE TABLE IF NOT EXISTS catalog_sync_status_en(
+          id INTEGER PRIMARY KEY CHECK(id=1), status TEXT NOT NULL DEFAULT 'ocioso',
+          fase TEXT, atual TEXT, processados INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0,
+          feed INTEGER NOT NULL DEFAULT 0, feeds INTEGER NOT NULL DEFAULT 0,
+          iniciado TEXT, finalizado TEXT, ultima_concluida TEXT, erro TEXT, cancelar INTEGER NOT NULL DEFAULT 0);
+        INSERT OR IGNORE INTO catalog_sync_status_en(id,status) VALUES(1,'ocioso');
+        UPDATE catalog_sync_status_en SET status='interrompido',fase='Interrompido',
           atual='A aplicação foi reiniciada durante a atualização',finalizado=CURRENT_TIMESTAMP
           WHERE status='executando';
         """)
@@ -312,10 +329,24 @@ def worker() -> None:
                 with controle_lock:
                     controles.pop(job_id, None)
                 continue
+            task_row = con.execute("SELECT task_json FROM jobs WHERE id=?", (job_id,)).fetchone()
+            try:
+                task_data = json.loads(task_row["task_json"] or "{}") if task_row else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                task_data = {}
             control.checkpoint()
-            resolved = core.resolver_fontes(sources, control)
+            is_original = task_data.get("version") == "orig"
+            if is_original:
+                quality = int(task_data.get("max_h") or 1080)
+                sources = [dict(source, max_h=quality) if isinstance(source, dict) else source
+                           for source in sources]
+                resolved = saimo_en.resolver_fontes(
+                    sources, control, int(task_data.get("provider_offset") or 0))
+            else:
+                resolved = core.resolver_fontes(sources, control)
             if not resolved:
-                con.execute("UPDATE jobs SET status='erro', erro=? WHERE id=?", ("sem fonte disponível", job_id))
+                con.execute("UPDATE jobs SET status='erro',aviso=NULL,erro=? WHERE id=?",
+                            ("sem fonte disponível", job_id))
                 con.commit()
                 continue
 
@@ -337,16 +368,50 @@ def worker() -> None:
                     last_progress["time"] = now
                     last_progress["units"] = done
 
-            result = core.baixar(resolved, output_base, progress, control)
+            result = None
+            source_errors = []
+            if is_original:
+                for candidate in resolved:
+                    control.checkpoint()
+                    candidate["quality"] = quality
+                    try:
+                        if candidate.get("audio_url") or candidate.get("provider") == "ytdlp":
+                            result = saimo_en.baixar_ytdlp(candidate, output_base, progress, control)
+                            if not result and not candidate.get("audio_url"):
+                                result = core.baixar([candidate], output_base, progress, control)
+                        else:
+                            result = core.baixar([candidate], output_base, progress, control)
+                        if result:
+                            break
+                        source_errors.append(f"{candidate.get('provider') or 'fonte'}: falha no download")
+                    except (core.DownloadPaused, core.DownloadCancelled):
+                        raise
+                    except Exception as exc:
+                        source_errors.append(f"{candidate.get('provider') or 'fonte'}: {str(exc)[:100]}")
+            else:
+                result = core.baixar(resolved, output_base, progress, control)
+
+            aviso = None
+            if result and is_original and task_data.get("legenda") and task_data.get("tmdb_id"):
+                try:
+                    legenda = saimo_en.buscar_legenda(
+                        int(task_data["tmdb_id"]), str(task_data.get("kind") or "movie"),
+                        int(task_data.get("season") or 0), int(task_data.get("episode") or 0))
+                    if legenda:
+                        Path(result).with_suffix(".srt").write_text(legenda, encoding="utf-8-sig")
+                    else:
+                        aviso = "Vídeo baixado sem legenda PT-BR: não encontrada ou API indisponível."
+                except Exception:
+                    aviso = "Vídeo baixado sem legenda PT-BR: não foi possível consultar a busca."
             with controle_lock:
                 control.checkpoint()
                 if result:
                     relative = os.path.relpath(result, core.DESTINO)
-                    con.execute("UPDATE jobs SET status='concluido', pct=100, arquivo=? WHERE id=?",
-                                (relative, job_id))
+                    con.execute("UPDATE jobs SET status='concluido', pct=100, arquivo=?,aviso=?,erro=NULL WHERE id=?",
+                                (relative, aviso, job_id))
                 else:
                     con.execute("UPDATE jobs SET status='erro', erro=? WHERE id=?",
-                                ("todas as fontes falharam", job_id))
+                                ("; ".join(source_errors[-3:]) or "todas as fontes falharam", job_id))
                 con.commit()
         except core.DownloadPaused:
             row = con.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -386,15 +451,20 @@ for _ in range(PARALELO):
 
 
 @app.get("/api/catalog/letters")
-def catalog_letters(req: Request, tipo: str = ""):
+def catalog_letters(req: Request, tipo: str = "", idioma: str = "pt"):
     checar(req)
     if tipo not in ("", "f", "s"):
         raise HTTPException(400, "tipo deve ser f ou s")
+    if idioma not in ("pt", "en", "todos"):
+        raise HTTPException(400, "idioma deve ser pt, en ou todos")
     counts = []
     with session() as con:
         for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
             condition, values = condicao_letra(letter)
             conditions = [condition]
+            if idioma != "todos":
+                conditions.append("instr(ifnull(idioma,'pt'),?)>0")
+                values.append(idioma)
             if tipo:
                 conditions.append("tipo=?")
                 values.append(tipo)
@@ -407,11 +477,16 @@ def catalog_letters(req: Request, tipo: str = ""):
 
 @app.get("/api/items")
 def items(req: Request, q: str = "", tipo: str = "", pagina: int = 0,
-          limite: int = 60, letra: str = ""):
+          limite: int = 60, letra: str = "", idioma: str = "pt"):
     checar(req)
+    if idioma not in ("pt", "en", "todos"):
+        raise HTTPException(400, "idioma deve ser pt, en ou todos")
     pagina = max(0, pagina)
     limite = max(1, min(100, limite))
     conditions, values = ["1=1"], []
+    if idioma != "todos":
+        conditions.append("instr(ifnull(idioma,'pt'),?)>0")
+        values.append(idioma)
     if letra.strip():
         letter_condition, letter_values = condicao_letra(letra)
         conditions.append(letter_condition)
@@ -439,7 +514,12 @@ def items(req: Request, q: str = "", tipo: str = "", pagina: int = 0,
             f"ORDER BY {'titulo COLLATE NOCASE' if letra.strip() else 'destaque DESC, titulo COLLATE NOCASE'} LIMIT ? OFFSET ?",
             values + [limite, pagina * limite])]
         total = con.execute(f"SELECT COUNT(*) FROM items WHERE {where}", values).fetchone()[0]
-        catalog_count = con.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        if idioma == "todos":
+            catalog_count = con.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        else:
+            catalog_count = con.execute("SELECT COUNT(*) FROM items "
+                                        "WHERE instr(ifnull(idioma,'pt'),?)>0",
+                                        (idioma,)).fetchone()[0]
     return {"items": rows, "total": total, "pagina": pagina,
             "catalogo_sincronizado": catalog_count > 0}
 
@@ -527,6 +607,69 @@ def cancel_catalog_sync(req: Request):
     catalog_sync_cancel.set()
     with session() as con:
         con.execute("UPDATE catalog_sync_status SET cancelar=1,fase='Interrompendo' WHERE id=1")
+    return {"status": "interrompendo"}
+
+
+def _catalog_sync_en_worker() -> None:
+    import argparse
+    import sync_en
+    args = argparse.Namespace(limite=300, paginas=5, temporadas=20,
+                              pausa=0.3, somente_capas=False)
+    try:
+        sync_en.main(args=args, cancel_event=catalog_sync_cancel_en)
+    except Exception as exc:
+        with session() as con:
+            con.execute("UPDATE catalog_sync_status_en SET status='erro',fase='Falhou',erro=?,"
+                        "finalizado=CURRENT_TIMESTAMP WHERE id=1", (str(exc)[:300],))
+    finally:
+        catalog_sync_cancel_en.clear()
+        catalog_sync_lock_en.release()
+
+
+@app.get("/api/en/catalog/sync/status")
+def catalog_sync_status_en(req: Request):
+    checar(req)
+    with session() as con:
+        row = con.execute("SELECT * FROM catalog_sync_status_en WHERE id=1").fetchone()
+    result = dict(row) if row else {"status": "ocioso", "processados": 0, "total": 0}
+    total = int(result.get("total") or 0)
+    processed = int(result.get("processados") or 0)
+    result["porcentagem"] = round(min(100, processed * 100 / total), 1) if total else 0
+    return result
+
+
+@app.post("/api/en/catalog/sync")
+def start_catalog_sync_en(req: Request):
+    checar(req)
+    global catalog_sync_thread_en
+    if not catalog_sync_lock_en.acquire(blocking=False):
+        raise HTTPException(409, "atualização do catálogo EN já está em andamento")
+    catalog_sync_cancel_en.clear()
+    try:
+        with session() as con:
+            current = con.execute("SELECT status FROM catalog_sync_status_en WHERE id=1").fetchone()
+            if current and current[0] == "executando":
+                raise HTTPException(409, "atualização do catálogo EN já está em andamento")
+            con.execute("UPDATE catalog_sync_status_en SET status='executando',fase='Iniciando',"
+                        "atual='Preparando feeds',processados=0,total=0,feed=0,feeds=0,"
+                        "iniciado=CURRENT_TIMESTAMP,finalizado=NULL,erro=NULL,cancelar=0 WHERE id=1")
+        catalog_sync_thread_en = threading.Thread(target=_catalog_sync_en_worker,
+                                                  daemon=True, name="saimo-catalog-sync-en")
+        catalog_sync_thread_en.start()
+    except Exception:
+        catalog_sync_lock_en.release()
+        raise
+    return {"status": "executando"}
+
+
+@app.post("/api/en/catalog/sync/cancel")
+def cancel_catalog_sync_en(req: Request):
+    checar(req)
+    if not catalog_sync_lock_en.locked():
+        raise HTTPException(409, "não há atualização EN em andamento")
+    catalog_sync_cancel_en.set()
+    with session() as con:
+        con.execute("UPDATE catalog_sync_status_en SET cancelar=1,fase='Interrompendo' WHERE id=1")
     return {"status": "interrompendo"}
 
 
@@ -675,12 +818,26 @@ async def download(req: Request):
     except (ValueError, TypeError, AttributeError):
         raise HTTPException(400, "item_id inválido")
     version = str(body.get("versao", "dub"))
-    if version not in ("dub", "leg"):
+    if version not in ("dub", "leg", "orig"):
         raise HTTPException(400, "versão inválida")
+    original = version == "orig"
+    if original:
+        try:
+            quality = int(body.get("max_h", 1080))
+            provider_offset = max(0, min(10, int(body.get("provider_offset", 0))))
+        except (ValueError, TypeError):
+            raise HTTPException(400, "qualidade ou servidor inválido")
+        if quality not in (480, 720, 1080):
+            raise HTTPException(400, "qualidade deve ser 480, 720 ou 1080")
+        legenda_ativa = bool(body.get("legenda", True))
+    else:
+        quality, provider_offset, legenda_ativa = 1080, 0, False
     with session() as con:
         row = con.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
         if not row:
             raise HTTPException(404, "item não encontrado")
+        if original and "en" not in (row["idioma"] or "").split(","):
+            raise HTTPException(400, "este título não está no catálogo EN")
         episodes = []
         selected_episodes = []
         if row["tipo"] == "s":
@@ -723,7 +880,13 @@ async def download(req: Request):
             directory = os.path.join(media_root, title)
             Path(directory).mkdir(parents=True, exist_ok=True)
             output_base = os.path.join(directory, f"{title} [{version}]")
-            task_json = json.dumps({"sources": sources, "output_base": output_base})
+            task_data = {"sources": sources, "output_base": output_base}
+            if original:
+                task_data.update({"version": "orig", "max_h": quality,
+                                  "provider_offset": provider_offset, "legenda": legenda_ativa,
+                                  "tmdb_id": row["tmdb_id"],
+                                  "kind": "tv" if row["tipo"] == "s" else "movie"})
+            task_json = json.dumps(task_data)
             cursor = con.execute("INSERT INTO jobs(titulo,status,task_json,item_id) VALUES(?, 'fila', ?, ?)",
                                  (job_title, task_json, item_id))
             job_id = cursor.lastrowid
@@ -743,7 +906,13 @@ async def download(req: Request):
                 Path(season_directory).mkdir(parents=True, exist_ok=True)
                 file_title = f"{title} - S{episode['temp']:02d}E{episode['ep']:02d} [{version}]"
                 output_base = os.path.join(season_directory, file_title)
-                task_json = json.dumps({"sources": sources, "output_base": output_base})
+                task_data = {"sources": sources, "output_base": output_base}
+                if original:
+                    task_data.update({"version": "orig", "max_h": quality,
+                                      "provider_offset": provider_offset, "legenda": legenda_ativa,
+                                      "tmdb_id": row["tmdb_id"], "kind": "tv",
+                                      "season": int(episode["temp"]), "episode": int(episode["ep"])})
+                task_json = json.dumps(task_data)
                 cursor = con.execute("INSERT INTO jobs(titulo,status,task_json,item_id) VALUES(?, 'fila', ?, ?)",
                                      (episode_title, task_json, item_id))
                 job_id = cursor.lastrowid
@@ -794,7 +963,7 @@ def completed_jobs(req: Request, pagina: int = 0, limite: int = 25):
         paginas = (total + limite - 1) // limite
         pagina = min(pagina, max(0, paginas - 1))
         rows = [dict(row) for row in con.execute(
-            "SELECT id,titulo,arquivo,criado FROM jobs "
+            "SELECT id,titulo,arquivo,criado,aviso FROM jobs "
             "WHERE hidden=0 AND status='concluido' ORDER BY id DESC LIMIT ? OFFSET ?",
             (limite, pagina * limite))]
     return {"jobs": rows, "total": total, "pagina": pagina,
@@ -941,8 +1110,14 @@ def resume_job(req: Request, job_id: int):
 
 
 @app.post("/api/jobs/{job_id}/retry")
-def retry_job(req: Request, job_id: int):
+async def retry_job(req: Request, job_id: int):
     checar(req)
+    try:
+        body = await req.json()
+    except (ValueError, TypeError):
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
     task = None
     with session() as con:
         row = con.execute("SELECT titulo,status,task_json FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -956,6 +1131,15 @@ def retry_job(req: Request, job_id: int):
             output_base = payload["output_base"]
             if not isinstance(sources, list) or not sources or not isinstance(output_base, str):
                 raise ValueError("payload inválido")
+            if body.get("outro_servidor") and payload.get("version") == "orig":
+                payload["provider_offset"] = int(payload.get("provider_offset") or 0) + 1
+                con.execute("UPDATE jobs SET task_json=? WHERE id=?",
+                            (json.dumps(payload), job_id))
+            if body.get("outra_qualidade") and payload.get("version") == "orig":
+                current_quality = int(payload.get("max_h") or 1080)
+                payload["max_h"] = {1080: 720, 720: 480, 480: 1080}.get(current_quality, 720)
+                con.execute("UPDATE jobs SET task_json=? WHERE id=?",
+                            (json.dumps(payload), job_id))
             task = (job_id, row["titulo"], sources, output_base)
         except (ValueError, TypeError, KeyError, json.JSONDecodeError):
             raise HTTPException(409, "dados do download não permitem nova tentativa")

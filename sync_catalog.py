@@ -414,7 +414,7 @@ def criar(con: sqlite3.Connection) -> None:
       titulo_norm TEXT NOT NULL, ano TEXT NOT NULL DEFAULT '', letra TEXT,
       pedaco INTEGER DEFAULT 0, poster TEXT, generos TEXT DEFAULT '',
       sinopse TEXT DEFAULT '', fontes TEXT DEFAULT '{}', eps INTEGER DEFAULT 0,
-      tmdb_id INTEGER, atores TEXT DEFAULT '',
+      tmdb_id INTEGER, atores TEXT DEFAULT '', idioma TEXT DEFAULT 'pt',
       destaque INTEGER DEFAULT 0, UNIQUE(tipo, titulo, ano));
     CREATE TABLE IF NOT EXISTS episodes(
       item_id INTEGER NOT NULL, temp INTEGER NOT NULL, ep INTEGER NOT NULL,
@@ -454,6 +454,8 @@ def criar(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE items ADD COLUMN tmdb_id INTEGER")
     if "atores" not in columns:
         con.execute("ALTER TABLE items ADD COLUMN atores TEXT DEFAULT ''")
+    if "idioma" not in columns:
+        con.execute("ALTER TABLE items ADD COLUMN idioma TEXT DEFAULT 'pt'")
     status_columns = {row[1] for row in con.execute("PRAGMA table_info(catalog_sync_status)")}
     if "ultima_concluida" not in status_columns:
         con.execute("ALTER TABLE catalog_sync_status ADD COLUMN ultima_concluida TEXT")
@@ -461,13 +463,25 @@ def criar(con: sqlite3.Connection) -> None:
 
 def upsert(con: sqlite3.Connection, tipo: str, titulo: str, letra: str,
            ano: str, fontes: dict, eps: int = 0, pedaco: int = 0) -> int:
-    con.execute("""INSERT INTO items(tipo,titulo,titulo_norm,ano,letra,pedaco,fontes,eps)
-                   VALUES(?,?,?,?,?,?,?,?)
+    existing = con.execute("SELECT idioma,fontes FROM items WHERE tipo=? AND titulo=? AND ano=?",
+                           (tipo, titulo, ano)).fetchone()
+    languages = set(((existing["idioma"] or "pt") if existing else "pt").split(","))
+    languages.add("pt")
+    if existing:
+        try:
+            old_sources = json.loads(existing["fontes"] or "{}")
+            if isinstance(old_sources, dict) and "orig" in old_sources and "orig" not in fontes:
+                fontes = {**fontes, "orig": old_sources["orig"]}
+        except (TypeError, ValueError):
+            pass
+    con.execute("""INSERT INTO items(tipo,titulo,titulo_norm,ano,letra,pedaco,fontes,eps,idioma)
+                   VALUES(?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(tipo,titulo,ano) DO UPDATE SET
                      fontes=excluded.fontes, eps=excluded.eps,
-                     letra=excluded.letra, pedaco=excluded.pedaco""",
+                     letra=excluded.letra, pedaco=excluded.pedaco, idioma=excluded.idioma""",
                 (tipo, titulo, titulo.casefold(), ano, letra, pedaco,
-                 json.dumps(fontes, ensure_ascii=False), eps))
+                 json.dumps(fontes, ensure_ascii=False), eps,
+                 ",".join(sorted(language for language in languages if language))))
     row = con.execute("SELECT id FROM items WHERE tipo=? AND titulo=? AND ano=?",
                       (tipo, titulo, ano)).fetchone()
     return int(row[0])
@@ -772,10 +786,30 @@ def _main_impl(args=None, progress_callback=None, cancel_event=None) -> None:
                 title = line.split("\t")[0].replace("fila ", "").strip()
                 con.execute("UPDATE items SET destaque=1 WHERE titulo=?", (title,))
         con.execute("DELETE FROM episodes WHERE item_id IN (SELECT id FROM _sync_items) "
-                    "AND NOT EXISTS (SELECT 1 FROM _sync_episodes s WHERE s.item_id=episodes.item_id "
-                    "AND s.temp=episodes.temp AND s.ep=episodes.ep AND s.versao=episodes.versao)")
-        con.execute("DELETE FROM episodes WHERE item_id NOT IN (SELECT id FROM _sync_items)")
-        con.execute("DELETE FROM items WHERE id NOT IN (SELECT id FROM _sync_items)")
+                    "AND versao!='orig' AND NOT EXISTS (SELECT 1 FROM _sync_episodes s "
+                    "WHERE s.item_id=episodes.item_id AND s.temp=episodes.temp "
+                    "AND s.ep=episodes.ep AND s.versao=episodes.versao)")
+        # Preserve EN-only records when a complete PT feed no longer contains them.
+        english_only = con.execute("SELECT id,fontes FROM items WHERE id NOT IN "
+                                   "(SELECT id FROM _sync_items) AND instr(ifnull(idioma,''),'en')>0").fetchall()
+        for row in english_only:
+            try:
+                source_map = json.loads(row["fontes"] or "{}")
+            except (TypeError, ValueError):
+                source_map = {}
+            if not isinstance(source_map, dict):
+                source_map = {}
+            source_map = {key: value for key, value in source_map.items() if key == "orig"}
+            if "orig" not in source_map:
+                con.execute("DELETE FROM items WHERE id=?", (row["id"],))
+                continue
+            con.execute("UPDATE items SET idioma='en',fontes=? WHERE id=?",
+                        (json.dumps(source_map, ensure_ascii=False), row["id"]))
+            con.execute("DELETE FROM episodes WHERE item_id=? AND versao!='orig'", (row["id"],))
+        con.execute("DELETE FROM episodes WHERE item_id NOT IN (SELECT id FROM _sync_items) "
+                    "AND item_id NOT IN (SELECT id FROM items WHERE instr(ifnull(idioma,''),'en')>0)")
+        con.execute("DELETE FROM items WHERE id NOT IN (SELECT id FROM _sync_items) "
+                    "AND instr(ifnull(idioma,''),'en')=0")
         # Registra apenas diferenças em relação ao último catálogo concluído.
         con.execute("DELETE FROM catalog_sync_changes")
         con.execute("""INSERT INTO catalog_sync_changes(tipo,item_id,item_tipo,titulo,ano)

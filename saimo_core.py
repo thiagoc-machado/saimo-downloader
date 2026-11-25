@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import select
 import shutil
 import subprocess
 import threading
@@ -79,12 +80,14 @@ def session() -> requests.Session:
 
 
 def get(url: str, referer: str | None = None, binary: bool = False, stream: bool = False,
-        cookies=None, extra_headers: dict[str, str] | None = None):
+        cookies=None, extra_headers: dict[str, str] | None = None,
+        attempts: int | None = None):
     headers = {"Referer": referer} if referer else {}
     if extra_headers:
         headers.update(extra_headers)
     last_error = "falha de rede"
-    for attempt in range(TENTATIVAS):
+    retries = max(1, int(attempts or TENTATIVAS))
+    for attempt in range(retries):
         try:
             response = session().get(url, headers=headers, timeout=TIMEOUT, stream=stream,
                                      cookies=cookies)
@@ -96,7 +99,7 @@ def get(url: str, referer: str | None = None, binary: bool = False, stream: bool
                 break
         except requests.RequestException as exc:
             last_error = type(exc).__name__
-        if attempt < TENTATIVAS - 1:
+        if attempt < retries - 1:
             time.sleep(1.2 * (attempt + 1))
     raise RuntimeError(last_error)
 
@@ -117,10 +120,11 @@ def usar_proxy(url: str) -> bool:
 
 
 def get_fonte(url: str, referer: str | None = None, stream: bool = False,
-              cookies=None, extra_headers: dict[str, str] | None = None):
+              cookies=None, extra_headers: dict[str, str] | None = None,
+              attempts: int | None = None):
     """Tenta a fonte original primeiro; usa o proxy como fallback para fontes bloqueadas."""
     targets = [url]
-    if usar_proxy(url):
+    if attempts is None and usar_proxy(url):
         proxied = prox(url, referer)
         if proxied != url:
             targets.append(proxied)
@@ -128,7 +132,7 @@ def get_fonte(url: str, referer: str | None = None, stream: bool = False,
     for target in targets:
         try:
             response = get(target, referer=referer, stream=stream, cookies=cookies,
-                           extra_headers=extra_headers)
+                           extra_headers=extra_headers, attempts=attempts)
             if stream:
                 content_type = response.headers.get("Content-Type", "").lower()
                 if content_type.startswith("text/") or "application/json" in content_type:
@@ -223,18 +227,25 @@ def escolher_variante(master: str, qualidade: int) -> str | None:
 
 
 def baixar_mp4(url: str, destino: str, cb=None, referer: str | None = None,
-               control: DownloadControl | None = None) -> None:
+               control: DownloadControl | None = None,
+               headers: dict[str, str] | None = None,
+               attempts: int | None = None) -> None:
     temporary = destino + ".part"
     offset = os.path.getsize(temporary) if os.path.exists(temporary) else 0
-    headers = {"Range": f"bytes={offset}-"} if offset else {}
+    base_headers = dict(headers or {})
     if control:
         control.checkpoint()
     try:
-        response = get_fonte(url, referer=referer, stream=True, extra_headers=headers)
+        request_headers = dict(base_headers)
+        if offset:
+            request_headers["Range"] = f"bytes={offset}-"
+        response = get_fonte(url, referer=referer, stream=True, extra_headers=request_headers,
+                             attempts=attempts)
         if offset and response.status_code != 206:
             response.close()
             offset = 0
-            response = get_fonte(url, referer=referer, stream=True)
+            response = get_fonte(url, referer=referer, stream=True, extra_headers=base_headers,
+                                 attempts=attempts)
         with response, open(temporary, "ab" if offset else "wb") as output:
             length = int(response.headers.get("Content-Length") or 0)
             total = offset + length if length else 0
@@ -257,18 +268,19 @@ def baixar_mp4(url: str, destino: str, cb=None, referer: str | None = None,
 
 
 def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = None,
-               control: DownloadControl | None = None) -> None:
+               control: DownloadControl | None = None, headers: dict[str, str] | None = None,
+               qualidade: int | None = None, attempts: int | None = None) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     ref = referer or referer_de(master_url)
-    master = get_fonte(master_url, referer=ref)
+    master = get_fonte(master_url, referer=ref, extra_headers=headers, attempts=attempts)
     playlist_url = master_url
     if "#EXT-X-STREAM-INF" in master:
-        variant = escolher_variante(master, QUALIDADE)
+        variant = escolher_variante(master, qualidade or QUALIDADE)
         if not variant:
             raise RuntimeError("master sem variantes")
         playlist_url = urljoin(master_url, variant)
-        playlist = get_fonte(playlist_url, referer=ref)
+        playlist = get_fonte(playlist_url, referer=ref, extra_headers=headers, attempts=attempts)
     else:
         playlist = master
     segment_cookies = session().cookies.copy()
@@ -297,7 +309,8 @@ def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = Non
         path = os.path.join(folder, f"{index:06d}.ts")
         if not (os.path.exists(path) and os.path.getsize(path)):
             temporary = path + ".part"
-            with get_fonte(segment_url, referer=ref, stream=True, cookies=segment_cookies) as response, open(temporary, "wb") as output:
+            with get_fonte(segment_url, referer=ref, stream=True, cookies=segment_cookies,
+                           extra_headers=headers, attempts=attempts) as response, open(temporary, "wb") as output:
                 for chunk in response.iter_content(CHUNK):
                     if control:
                         control.checkpoint()
@@ -364,22 +377,127 @@ def baixar_hls(master_url: str, destino: str, cb=None, referer: str | None = Non
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def baixar(fontes: list[str], destino_base: str, cb=None,
+def baixar_hls_ffmpeg(master_url: str, destino: str, cb=None,
+                      headers: dict[str, str] | None = None,
+                      qualidade: int | None = None,
+                      control: DownloadControl | None = None) -> None:
+    """Baixa HLS no ffmpeg, enviando os mesmos cabeçalhos à playlist e aos segmentos."""
+    ref = (headers or {}).get("Referer") or referer_de(master_url)
+    master = get_fonte(master_url, referer=ref, extra_headers=headers, attempts=2)
+    playlist_url = master_url
+    if "#EXT-X-STREAM-INF" in master:
+        variants = []
+        lines = master.splitlines()
+        for index, line in enumerate(lines):
+            if not line.startswith("#EXT-X-STREAM-INF"):
+                continue
+            match = re.search(r"RESOLUTION=(\d+)x(\d+)", line)
+            height = int(match.group(2)) if match else 0
+            variant = next((candidate.strip() for candidate in lines[index + 1:]
+                            if candidate.strip() and not candidate.strip().startswith("#")), None)
+            if variant:
+                variants.append((height, variant))
+        eligible = [entry for entry in variants if entry[0] <= (qualidade or QUALIDADE)]
+        if not eligible:
+            raise RuntimeError("nenhuma variante HLS dentro da qualidade selecionada")
+        eligible.sort(key=lambda entry: entry[0])
+        playlist_url = urljoin(master_url, eligible[-1][1])
+    manifest = get_fonte(playlist_url, referer=ref, extra_headers=headers, attempts=2)
+    duration = sum(float(value) for value in re.findall(r"#EXTINF:([0-9.]+)", manifest))
+    temporary = destino + ".part"
+    try:
+        os.remove(temporary)
+    except FileNotFoundError:
+        pass
+    command = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+               "-rw_timeout", "25000000"]
+    if headers:
+        header_text = "".join(
+            f"{key}: {str(value).replace(chr(13), '').replace(chr(10), '')}\r\n"
+            for key, value in headers.items() if value is not None)
+        command += ["-headers", header_text]
+    command += ["-i", playlist_url, "-c", "copy", "-progress", "pipe:1", "-nostats",
+                "-f", "mp4", temporary]
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   text=True, bufsize=1)
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffmpeg não encontrado; instale ffmpeg para baixar HLS") from exc
+    try:
+        buffer = ""
+        while process.poll() is None:
+            if control:
+                control.checkpoint()
+            ready, _, _ = select.select([process.stdout], [], [], 0.25)
+            if not ready or process.stdout is None:
+                continue
+            chunk = process.stdout.readline()
+            if not chunk:
+                continue
+            buffer += chunk
+            if buffer.startswith("out_time_ms=") and duration > 0:
+                try:
+                    elapsed = int(buffer.split("=", 1)[1]) / 1_000_000
+                    if cb:
+                        cb(min(elapsed, duration), duration, 0, 0)
+                except ValueError:
+                    pass
+            buffer = ""
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command)
+        if not os.path.isfile(temporary) or not os.path.getsize(temporary):
+            raise RuntimeError("ffmpeg não gerou o arquivo HLS")
+        os.replace(temporary, destino)
+    except (DownloadPaused, DownloadCancelled):
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        try:
+            os.remove(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+    except Exception:
+        try:
+            os.remove(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def baixar(fontes: list[str | dict], destino_base: str, cb=None,
            control: DownloadControl | None = None) -> str | None:
     errors = []
-    for url in fontes:
+    for fonte in fontes:
+        candidato = fonte if isinstance(fonte, dict) else {}
+        url = str(candidato.get("url") or fonte)
+        headers = candidato.get("headers") if isinstance(candidato.get("headers"), dict) else {}
+        qualidade = int(candidato.get("quality") or QUALIDADE)
+        referer = headers.get("Referer") or referer_de(url)
         parsed = urlparse(url.lower())
         output = destino_base + ".mp4"
         try:
             if control:
                 control.checkpoint()
             if parsed.path.endswith((".m3u8", ".txt")):
-                baixar_hls(url, output, cb, referer_de(url), control)
+                if isinstance(fonte, dict):
+                    baixar_hls_ffmpeg(url, output, cb, headers, qualidade, control)
+                else:
+                    baixar_hls(url, output, cb, referer, control)
             elif parsed.path.endswith(".mpd"):
                 errors.append("fonte DASH (.mpd) não suportada")
                 continue
             else:
-                baixar_mp4(url, output, cb, referer_de(url), control)
+                baixar_mp4(url, output, cb, referer, control, headers,
+                           attempts=2 if isinstance(fonte, dict) else None)
             return output
         except (DownloadPaused, DownloadCancelled):
             raise
