@@ -41,6 +41,30 @@ controles: dict[int, core.DownloadControl] = {}
 controle_lock = threading.Lock()
 ids_enfileirados: set[int] = set()
 fila_lock = threading.Lock()
+catalog_sync_lock = threading.Lock()
+catalog_sync_cancel = threading.Event()
+catalog_sync_thread: threading.Thread | None = None
+ALPHA_VARIANTS = {
+    "A": "aáàâãäåāăą", "C": "cçćč", "E": "eéèêëēĕėęě",
+    "I": "iíìîïīĭįı", "N": "nñńňņ", "O": "oóòôõöøōŏő",
+    "S": "sśšşṣ", "U": "uúùûüūŭůűų", "Y": "yýÿŷ",
+    "Z": "zżžź",
+}
+
+
+def condicao_letra(letter: str) -> tuple[str, list[str]]:
+    letter = letter.strip().upper()
+    if len(letter) != 1 or letter not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        raise HTTPException(400, "letra deve ser de A a Z")
+    variants = ALPHA_VARIANTS.get(letter, letter.lower())
+    ranges = []
+    values = []
+    for char in variants:
+        low = char.casefold()
+        high = chr(ord(low[-1]) + 1)
+        ranges.append("(titulo_norm>=? AND titulo_norm<?)")
+        values.extend((low, high))
+    return "(" + " OR ".join(ranges) + ")", values
 
 
 def enfileirar(task: tuple) -> None:
@@ -87,6 +111,8 @@ def limpar_progresso_job(output_base: str) -> None:
 
 def db() -> sqlite3.Connection:
     con = sqlite3.connect(DB, timeout=30, check_same_thread=False)
+    con.execute("PRAGMA busy_timeout=30000")
+    con.execute("PRAGMA synchronous=NORMAL")
     con.row_factory = sqlite3.Row
     return con
 
@@ -113,6 +139,8 @@ def preparar_armazenamento() -> None:
     """Migra a tabela de jobs e recupera tarefas persistidas após reinício."""
     global SEARCH_FTS
     with session() as con:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA synchronous=NORMAL")
         con.executescript("""
         CREATE TABLE IF NOT EXISTS items(
           id INTEGER PRIMARY KEY, tipo TEXT NOT NULL, titulo TEXT NOT NULL,
@@ -152,6 +180,32 @@ def preparar_armazenamento() -> None:
             con.execute("ALTER TABLE jobs ADD COLUMN hidden INTEGER DEFAULT 0")
         con.execute("CREATE INDEX IF NOT EXISTS ix_jobs_item_status ON jobs(item_id,status)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_jobs_hidden_status_id ON jobs(hidden,status,id DESC)")
+        con.executescript("""
+        CREATE TABLE IF NOT EXISTS catalog_sync_status(
+          id INTEGER PRIMARY KEY CHECK(id=1), status TEXT NOT NULL DEFAULT 'ocioso',
+          fase TEXT, atual TEXT, processados INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0,
+          feed INTEGER NOT NULL DEFAULT 0, feeds INTEGER NOT NULL DEFAULT 0,
+          iniciado TEXT, finalizado TEXT, ultima_concluida TEXT, erro TEXT, cancelar INTEGER NOT NULL DEFAULT 0);
+        INSERT OR IGNORE INTO catalog_sync_status(id,status) VALUES(1,'ocioso');
+        CREATE TABLE IF NOT EXISTS catalog_sync_meta(id INTEGER PRIMARY KEY CHECK(id=1), baseline_ativo INTEGER NOT NULL DEFAULT 0);
+        INSERT OR IGNORE INTO catalog_sync_meta(id,baseline_ativo) VALUES(1,0);
+        CREATE TABLE IF NOT EXISTS catalog_sync_baseline_items(
+          id INTEGER PRIMARY KEY, tipo TEXT NOT NULL, titulo TEXT NOT NULL, ano TEXT NOT NULL DEFAULT '');
+        CREATE TABLE IF NOT EXISTS catalog_sync_baseline_episodes(
+          item_id INTEGER NOT NULL, temp INTEGER NOT NULL, ep INTEGER NOT NULL, versao TEXT NOT NULL,
+          PRIMARY KEY(item_id,temp,ep,versao));
+        CREATE TABLE IF NOT EXISTS catalog_sync_changes(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT NOT NULL, item_id INTEGER,
+          item_tipo TEXT NOT NULL, titulo TEXT NOT NULL, ano TEXT NOT NULL DEFAULT '',
+          temp INTEGER, ep INTEGER, versao TEXT);
+        CREATE INDEX IF NOT EXISTS ix_catalog_changes_type ON catalog_sync_changes(tipo,item_id);
+        UPDATE catalog_sync_status SET status='interrompido',fase='Interrompido',
+          atual='A aplicação foi reiniciada durante a atualização',finalizado=CURRENT_TIMESTAMP
+          WHERE status='executando';
+        """)
+        status_columns = {row[1] for row in con.execute("PRAGMA table_info(catalog_sync_status)")}
+        if "ultima_concluida" not in status_columns:
+            con.execute("ALTER TABLE catalog_sync_status ADD COLUMN ultima_concluida TEXT")
         has_items = con.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='items'").fetchone()
         if has_items:
@@ -331,12 +385,37 @@ for _ in range(PARALELO):
     threading.Thread(target=worker, daemon=True, name="saimo-download-worker").start()
 
 
+@app.get("/api/catalog/letters")
+def catalog_letters(req: Request, tipo: str = ""):
+    checar(req)
+    if tipo not in ("", "f", "s"):
+        raise HTTPException(400, "tipo deve ser f ou s")
+    counts = []
+    with session() as con:
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            condition, values = condicao_letra(letter)
+            conditions = [condition]
+            if tipo:
+                conditions.append("tipo=?")
+                values.append(tipo)
+            total = con.execute(
+                f"SELECT COUNT(*) FROM items WHERE {' AND '.join(conditions)}", values
+            ).fetchone()[0]
+            counts.append({"letra": letter, "total": total})
+    return {"letras": counts}
+
+
 @app.get("/api/items")
-def items(req: Request, q: str = "", tipo: str = "", pagina: int = 0, limite: int = 60):
+def items(req: Request, q: str = "", tipo: str = "", pagina: int = 0,
+          limite: int = 60, letra: str = ""):
     checar(req)
     pagina = max(0, pagina)
     limite = max(1, min(100, limite))
     conditions, values = ["1=1"], []
+    if letra.strip():
+        letter_condition, letter_values = condicao_letra(letra)
+        conditions.append(letter_condition)
+        values.extend(letter_values)
     if q.strip():
         term = q.strip().casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         if SEARCH_FTS and len(q.strip()) >= 3:
@@ -357,7 +436,7 @@ def items(req: Request, q: str = "", tipo: str = "", pagina: int = 0, limite: in
             "('resolvendo','baixando','pausando','cancelando')) AS downloads_ativos,"
             "(SELECT COUNT(*) FROM jobs j WHERE j.item_id=items.id AND j.status IN ('fila','pausado')) AS downloads_fila "
             f"FROM items WHERE {where} "
-            "ORDER BY destaque DESC, titulo COLLATE NOCASE LIMIT ? OFFSET ?",
+            f"ORDER BY {'titulo COLLATE NOCASE' if letra.strip() else 'destaque DESC, titulo COLLATE NOCASE'} LIMIT ? OFFSET ?",
             values + [limite, pagina * limite])]
         total = con.execute(f"SELECT COUNT(*) FROM items WHERE {where}", values).fetchone()[0]
         catalog_count = con.execute("SELECT COUNT(*) FROM items").fetchone()[0]
@@ -386,6 +465,101 @@ def item_status(req: Request, ids: str = ""):
             f"FROM items i LEFT JOIN jobs j ON j.item_id=i.id WHERE i.id IN ({placeholders}) GROUP BY i.id,i.tipo",
             item_ids)]
     return {"items": rows}
+
+
+def _catalog_sync_worker() -> None:
+    import argparse
+    import sync_catalog
+    args = argparse.Namespace(imagens=True, pausa=0.0, diagnostico_fichas=False,
+                              tmdb_fallback=False, somente_capas=False,
+                              refazer_cache_negativo=False)
+    try:
+        sync_catalog.main(args=args, cancel_event=catalog_sync_cancel)
+    except Exception:
+        # O estado e a mensagem de erro ficam persistidos pelo sincronizador.
+        pass
+    finally:
+        catalog_sync_cancel.clear()
+        catalog_sync_lock.release()
+
+
+@app.get("/api/catalog/sync/status")
+def catalog_sync_status(req: Request):
+    checar(req)
+    with session() as con:
+        row = con.execute("SELECT * FROM catalog_sync_status WHERE id=1").fetchone()
+    result = dict(row) if row else {"status": "ocioso", "processados": 0, "total": 0}
+    total = int(result.get("total") or 0)
+    processed = int(result.get("processados") or 0)
+    result["porcentagem"] = round(min(100, processed * 100 / total), 1) if total else 0
+    return result
+
+
+@app.post("/api/catalog/sync")
+def start_catalog_sync(req: Request):
+    checar(req)
+    global catalog_sync_thread
+    if not catalog_sync_lock.acquire(blocking=False):
+        raise HTTPException(409, "atualização do catálogo já está em andamento")
+    catalog_sync_cancel.clear()
+    try:
+        with session() as con:
+            current = con.execute("SELECT status FROM catalog_sync_status WHERE id=1").fetchone()
+            if current and current[0] == "executando":
+                raise HTTPException(409, "atualização do catálogo já está em andamento")
+            con.execute("UPDATE catalog_sync_status SET status='executando',fase='Iniciando',atual='Preparando feeds',"
+                        "processados=0,total=0,feed=0,feeds=0,iniciado=CURRENT_TIMESTAMP,finalizado=NULL,"
+                        "erro=NULL,cancelar=0 WHERE id=1")
+        catalog_sync_thread = threading.Thread(target=_catalog_sync_worker,
+                                               daemon=True, name="saimo-catalog-sync")
+        catalog_sync_thread.start()
+    except Exception:
+        catalog_sync_lock.release()
+        raise
+    return {"status": "executando"}
+
+
+@app.post("/api/catalog/sync/cancel")
+def cancel_catalog_sync(req: Request):
+    checar(req)
+    if not catalog_sync_lock.locked():
+        raise HTTPException(409, "não há atualização em andamento")
+    catalog_sync_cancel.set()
+    with session() as con:
+        con.execute("UPDATE catalog_sync_status SET cancelar=1,fase='Interrompendo' WHERE id=1")
+    return {"status": "interrompendo"}
+
+
+@app.get("/api/catalog/novelties")
+def catalog_novelties(req: Request, pagina: int = 0, limite: int = 60):
+    checar(req)
+    pagina = max(0, pagina)
+    limite = max(1, min(100, limite))
+    with session() as con:
+        additions = con.execute("""SELECT i.id,i.tipo,i.titulo,i.ano,i.poster,i.generos,i.eps,i.destaque,
+            (SELECT COUNT(*) FROM jobs j WHERE j.item_id=i.id AND j.status='concluido') AS baixados,
+            (SELECT COUNT(*) FROM jobs j WHERE j.item_id=i.id AND j.status IN
+              ('resolvendo','baixando','pausando','cancelando')) AS downloads_ativos,
+            (SELECT COUNT(*) FROM jobs j WHERE j.item_id=i.id AND j.status IN ('fila','pausado')) AS downloads_fila,
+            SUM(CASE WHEN c.tipo='episodio_adicionado' THEN 1 ELSE 0 END) AS novos_episodios,
+            MAX(CASE WHEN c.tipo='adicionado' THEN 1 ELSE 0 END) AS titulo_novo
+            FROM catalog_sync_changes c JOIN items i ON i.id=c.item_id
+            WHERE c.tipo IN ('adicionado','episodio_adicionado')
+            GROUP BY i.id ORDER BY i.tipo,i.titulo COLLATE NOCASE LIMIT ? OFFSET ?""",
+            (limite, pagina * limite)).fetchall()
+        total_additions = con.execute("""SELECT COUNT(*) FROM (
+            SELECT item_id FROM catalog_sync_changes WHERE tipo IN ('adicionado','episodio_adicionado')
+            GROUP BY item_id)""").fetchone()[0]
+        removed = con.execute("SELECT item_tipo,titulo,ano FROM catalog_sync_changes WHERE tipo='eliminado' "
+                              "ORDER BY item_tipo,titulo COLLATE NOCASE LIMIT ? OFFSET ?",
+                              (limite, pagina * limite)).fetchall()
+        total_removed = con.execute("SELECT COUNT(*) FROM catalog_sync_changes WHERE tipo='eliminado'").fetchone()[0]
+        status = con.execute("SELECT ultima_concluida FROM catalog_sync_status WHERE id=1").fetchone()
+    return {"adicionados": [dict(row) for row in additions],
+            "eliminados": [dict(row) for row in removed],
+            "total_adicionados": total_additions, "total_eliminados": total_removed,
+            "pagina": pagina, "limite": limite,
+            "sincronizado_em": status[0] if status else None}
 
 
 def enriquecer_detalhes_tmdb(result: dict) -> dict:
@@ -442,6 +616,9 @@ def item(req: Request, item_id: int):
         episodes = [dict(ep) for ep in con.execute(
             "SELECT temp,ep,versao,fontes FROM episodes WHERE item_id=? ORDER BY temp,ep,versao",
             (item_id,))]
+        new_episodes = {(entry[0], entry[1], entry[2]) for entry in con.execute(
+            "SELECT temp,ep,versao FROM catalog_sync_changes "
+            "WHERE tipo='episodio_adicionado' AND item_id=?", (item_id,))}
     result = enriquecer_detalhes_tmdb(dict(row))
     try:
         result["fontes"] = json.loads(result.get("fontes") or "{}")
@@ -452,6 +629,8 @@ def item(req: Request, item_id: int):
             episode["fontes"] = json.loads(episode["fontes"] or "[]")
         except (TypeError, ValueError):
             episode["fontes"] = []
+        episode["novo_na_sincronizacao"] = (
+            episode["temp"], episode["ep"], episode["versao"]) in new_episodes
     result["episodios"] = episodes
     actors = result.get("atores")
     if isinstance(actors, str):

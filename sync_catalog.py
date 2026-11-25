@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
+import fcntl
 import json
 import os
 import re
 import sqlite3
 import time
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -23,8 +25,14 @@ CATALOGO = os.getenv("SAIMO_CATALOGO", "https://filmes-saimo.pages.dev").rstrip(
 DB = Path(os.getenv("SAIMO_DB", "./data/catalog.db")).expanduser()
 POSTERS = Path(os.getenv("SAIMO_POSTERS", "./static/posters")).expanduser()
 UA = {"User-Agent": "Mozilla/5.0 (compatible; saimo-local/1.0)"}
-HTTP = requests.Session()
 _missing_optional_feed = False
+_feed_cache: dict[str, str] = {}
+_progress_callback = None
+_cancel_event = None
+_records_processed = 0
+_records_total = 0
+_feed_index = 0
+_feed_total = 0
 TMDB_TOKEN = os.getenv("SAIMO_TMDB_TOKEN", "").strip()
 TMDB_API_KEY = os.getenv("SAIMO_TMDB_API_KEY", "").strip()
 
@@ -215,7 +223,7 @@ def buscar_capas_tmdb(con: sqlite3.Connection) -> None:
           f"{failed} buscas falharam. Resultados válidos foram guardados em cache", flush=True)
 
 
-def baixar_capas(con: sqlite3.Connection) -> None:
+def baixar_capas(con: sqlite3.Connection, progresso=None) -> None:
     pending = con.execute("SELECT id,poster FROM items WHERE poster LIKE 'http%' ").fetchall()
     downloaded_images = 0
 
@@ -251,15 +259,22 @@ def baixar_capas(con: sqlite3.Connection) -> None:
 
     with ThreadPoolExecutor(max_workers=12) as pool:
         futures = [pool.submit(download_image, row) for row in pending]
-        for completed, future in enumerate(as_completed(futures), start=1):
-            result = future.result()
-            if result:
-                con.execute("UPDATE items SET poster=? WHERE id=?", (result[1], result[0]))
-                downloaded_images += 1
-            if completed % 100 == 0 or completed == len(pending):
-                con.commit()
-                print(f"capas: {completed}/{len(pending)} URLs processadas; "
-                      f"{downloaded_images} baixadas", flush=True)
+        try:
+            for completed, future in enumerate(as_completed(futures), start=1):
+                if progresso and (completed % 20 == 0 or completed == len(pending)):
+                    progresso(completed, len(pending))
+                result = future.result()
+                if result:
+                    con.execute("UPDATE items SET poster=? WHERE id=?", (result[1], result[0]))
+                    downloaded_images += 1
+                if completed % 100 == 0 or completed == len(pending):
+                    con.commit()
+                    print(f"capas: {completed}/{len(pending)} URLs processadas; "
+                          f"{downloaded_images} baixadas", flush=True)
+        except Exception:
+            for future in futures:
+                future.cancel()
+            raise
     con.commit()
     print(f"capas finalizadas: {downloaded_images} baixadas de {len(pending)} URLs; "
           f"{len(pending) - downloaded_images} falharam", flush=True)
@@ -267,8 +282,10 @@ def baixar_capas(con: sqlite3.Connection) -> None:
 
 def texto(filename: str, optional: bool = False) -> str:
     global _missing_optional_feed
+    if filename in _feed_cache:
+        return _feed_cache[filename]
     try:
-        response = HTTP.get(f"{CATALOGO}/{filename}", headers=UA, timeout=30)
+        response = requests.get(f"{CATALOGO}/{filename}", headers=UA, timeout=30)
         if optional and response.status_code == 404:
             _missing_optional_feed = True
             print(f"aviso: catálogo sem arquivo opcional {filename}")
@@ -279,9 +296,119 @@ def texto(filename: str, optional: bool = False) -> str:
         raise RuntimeError(f"não foi possível baixar {filename}: {type(exc).__name__}") from exc
 
 
+class SyncCancelled(Exception):
+    pass
+
+
+def _status(con: sqlite3.Connection, status: str | None = None, phase: str | None = None,
+            current: str | None = None, error: str | None = None, force: bool = False) -> None:
+    """Persiste o progresso sem criar uma gravação por cada registro processado."""
+    global _records_processed, _records_total
+    if status == "concluido":
+        _records_total = max(_records_total, _records_processed)
+    callback = _progress_callback
+    if callback:
+        try:
+            callback({"status": status, "fase": phase, "atual": current,
+                      "processados": _records_processed, "total": _records_total,
+                      "feed": _feed_index, "feeds": _feed_total, "erro": error})
+        except Exception:
+            pass
+    con.execute("""UPDATE catalog_sync_status SET
+        status=COALESCE(?,CASE WHEN ? IS NOT NULL THEN 'executando' ELSE status END),
+        fase=COALESCE(?,fase), atual=COALESCE(?,atual),
+        processados=?, total=?, feed=?, feeds=?, erro=?,
+        finalizado=CASE WHEN ? IN ('concluido','incompleto','interrompido','erro') THEN CURRENT_TIMESTAMP ELSE finalizado END,
+        ultima_concluida=CASE WHEN ?='concluido' THEN CURRENT_TIMESTAMP ELSE ultima_concluida END
+        WHERE id=1""",
+        (status, phase, phase, current, _records_processed, _records_total, _feed_index, _feed_total,
+         error, status, status))
+    con.commit()
+
+
+def _checkpoint(con: sqlite3.Connection, force_status: bool = False) -> None:
+    if _cancel_event is not None and _cancel_event.is_set():
+        raise SyncCancelled("interrompido a pedido do usuário")
+    row = con.execute("SELECT cancelar FROM catalog_sync_status WHERE id=1").fetchone()
+    if row and row[0]:
+        raise SyncCancelled("interrompido a pedido do usuário")
+    if force_status:
+        _status(con)
+
+
+def _prefetch(con: sqlite3.Connection, filenames: list[str], optional: bool = True) -> None:
+    """Busca feeds em paralelo limitado a três requisições e guarda o snapshot em memória."""
+    global _feed_index, _feed_total, _records_total, _missing_optional_feed
+    names = list(dict.fromkeys(name for name in filenames if name not in _feed_cache))
+    if not names:
+        return
+    _feed_total += len(names)
+    _status(con, phase="Baixando feeds", current=names[0])
+
+    def fetch(name: str) -> tuple[str, str, bool]:
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = requests.get(f"{CATALOGO}/{name}", headers=UA, timeout=30)
+                if optional and response.status_code == 404:
+                    return name, "", True
+                if response.status_code == 429 or response.status_code >= 500:
+                    if attempt < 2:
+                        retry_after = response.headers.get("Retry-After", "")
+                        delay = min(15, int(retry_after)) if retry_after.isdigit() else 2 ** attempt
+                        time.sleep(delay)
+                        continue
+                response.raise_for_status()
+                return name, response.text, False
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+        raise RuntimeError(f"não foi possível baixar {name}: {type(last_error).__name__ if last_error else 'HTTP'}")
+
+    failures = []
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="catalog-feed") as pool:
+        futures = {pool.submit(fetch, name): name for name in names}
+        for future in as_completed(futures):
+            _checkpoint(con)
+            name = futures[future]
+            try:
+                key, body, missing = future.result()
+                _feed_cache[key] = body
+                if missing:
+                    _missing_optional_feed = True
+                    print(f"aviso: catálogo sem arquivo opcional {key}", flush=True)
+                _feed_index += 1
+                _status(con, phase="Baixando feeds", current=name)
+            except Exception as exc:
+                failures.append(exc)
+                for pending in futures:
+                    pending.cancel()
+                break
+    if failures:
+        raise failures[0]
+    _records_total = sum(
+        1 for name, body in _feed_cache.items() if name.startswith(("filmes-", "series-"))
+        for line in body.splitlines()
+        if line.strip() and not line.lstrip().startswith(("#", "@", "base:"))
+    )
+    _status(con, phase="Processando catálogo", current="Feeds carregados")
+
+
+def _record(con: sqlite3.Connection, current: str) -> None:
+    global _records_processed
+    _records_processed += 1
+    if _records_processed % 100 == 0:
+        con.commit()
+        _checkpoint(con)
+        _status(con, phase="Processando catálogo", current=current)
+
+
 def criar(con: sqlite3.Connection) -> None:
+    con.execute("PRAGMA busy_timeout=30000")
     con.executescript("""
     PRAGMA journal_mode=WAL;
+    PRAGMA synchronous=NORMAL;
     CREATE TABLE IF NOT EXISTS items(
       id INTEGER PRIMARY KEY, tipo TEXT NOT NULL, titulo TEXT NOT NULL,
       titulo_norm TEXT NOT NULL, ano TEXT NOT NULL DEFAULT '', letra TEXT,
@@ -300,6 +427,24 @@ def criar(con: sqlite3.Connection) -> None:
       item_id INTEGER, hidden INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS tmdb_poster_cache(
       chave TEXT PRIMARY KEY, poster TEXT NOT NULL DEFAULT '', atualizado TEXT DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS catalog_sync_status(
+      id INTEGER PRIMARY KEY CHECK(id=1), status TEXT NOT NULL DEFAULT 'ocioso',
+      fase TEXT, atual TEXT, processados INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0,
+      feed INTEGER NOT NULL DEFAULT 0, feeds INTEGER NOT NULL DEFAULT 0,
+      iniciado TEXT, finalizado TEXT, ultima_concluida TEXT, erro TEXT, cancelar INTEGER NOT NULL DEFAULT 0);
+    INSERT OR IGNORE INTO catalog_sync_status(id,status) VALUES(1,'ocioso');
+    CREATE TABLE IF NOT EXISTS catalog_sync_meta(id INTEGER PRIMARY KEY CHECK(id=1), baseline_ativo INTEGER NOT NULL DEFAULT 0);
+    INSERT OR IGNORE INTO catalog_sync_meta(id,baseline_ativo) VALUES(1,0);
+    CREATE TABLE IF NOT EXISTS catalog_sync_baseline_items(
+      id INTEGER PRIMARY KEY, tipo TEXT NOT NULL, titulo TEXT NOT NULL, ano TEXT NOT NULL DEFAULT '');
+    CREATE TABLE IF NOT EXISTS catalog_sync_baseline_episodes(
+      item_id INTEGER NOT NULL, temp INTEGER NOT NULL, ep INTEGER NOT NULL, versao TEXT NOT NULL,
+      PRIMARY KEY(item_id,temp,ep,versao));
+    CREATE TABLE IF NOT EXISTS catalog_sync_changes(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, tipo TEXT NOT NULL, item_id INTEGER,
+      item_tipo TEXT NOT NULL, titulo TEXT NOT NULL, ano TEXT NOT NULL DEFAULT '',
+      temp INTEGER, ep INTEGER, versao TEXT);
+    CREATE INDEX IF NOT EXISTS ix_catalog_changes_type ON catalog_sync_changes(tipo,item_id);
     CREATE INDEX IF NOT EXISTS ix_busca ON items(titulo_norm);
     CREATE INDEX IF NOT EXISTS ix_tipo ON items(tipo, letra);
     CREATE INDEX IF NOT EXISTS ix_episode_item ON episodes(item_id, temp, ep);
@@ -309,6 +454,9 @@ def criar(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE items ADD COLUMN tmdb_id INTEGER")
     if "atores" not in columns:
         con.execute("ALTER TABLE items ADD COLUMN atores TEXT DEFAULT ''")
+    status_columns = {row[1] for row in con.execute("PRAGMA table_info(catalog_sync_status)")}
+    if "ultima_concluida" not in status_columns:
+        con.execute("ALTER TABLE catalog_sync_status ADD COLUMN ultima_concluida TEXT")
 
 
 def upsert(con: sqlite3.Connection, tipo: str, titulo: str, letra: str,
@@ -325,21 +473,27 @@ def upsert(con: sqlite3.Connection, tipo: str, titulo: str, letra: str,
     return int(row[0])
 
 
-def main() -> None:
-    global _missing_optional_feed
+def _main_impl(args=None, progress_callback=None, cancel_event=None) -> None:
+    global _missing_optional_feed, _feed_cache, _progress_callback, _cancel_event
+    global _records_processed, _records_total, _feed_index, _feed_total
     _missing_optional_feed = False
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--imagens", action="store_true", help="espelhar capas em disco")
-    parser.add_argument("--pausa", type=float, default=0.25, help="pausa entre arquivos do catálogo")
-    parser.add_argument("--diagnostico-fichas", action="store_true",
-                        help="mostrar o formato de fichas.txt sem alterar o banco")
-    parser.add_argument("--tmdb-fallback", action="store_true",
-                        help="buscar no TMDb capas ausentes (requer token configurado)")
-    parser.add_argument("--somente-capas", action="store_true",
-                        help="não sincronizar catálogo; processar somente capas do banco local")
-    parser.add_argument("--refazer-cache-negativo", action="store_true",
-                        help="repetir buscas anteriores do TMDb que não encontraram capa")
-    args = parser.parse_args()
+    _feed_cache = {}
+    _progress_callback = progress_callback
+    _cancel_event = cancel_event
+    _records_processed = _records_total = _feed_index = _feed_total = 0
+    if args is None:
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("--imagens", action="store_true", help="espelhar capas em disco")
+        parser.add_argument("--pausa", type=float, default=0.25, help="pausa entre arquivos do catálogo")
+        parser.add_argument("--diagnostico-fichas", action="store_true",
+                            help="mostrar o formato de fichas.txt sem alterar o banco")
+        parser.add_argument("--tmdb-fallback", action="store_true",
+                            help="buscar no TMDb capas ausentes (requer token configurado)")
+        parser.add_argument("--somente-capas", action="store_true",
+                            help="não sincronizar catálogo; processar somente capas do banco local")
+        parser.add_argument("--refazer-cache-negativo", action="store_true",
+                            help="repetir buscas anteriores do TMDb que não encontraram capa")
+        args = parser.parse_args()
     if args.diagnostico_fichas:
         diagnosticar_fichas()
         return
@@ -363,6 +517,21 @@ def main() -> None:
         con.close()
         return
 
+    # Baseline persistente: uma execução cancelada pode deixar upserts parciais,
+    # mas não deve fazê-los desaparecer das novidades da próxima execução completa.
+    active = con.execute("SELECT baseline_ativo FROM catalog_sync_meta WHERE id=1").fetchone()[0]
+    if not active:
+        con.execute("DELETE FROM catalog_sync_baseline_items")
+        con.execute("DELETE FROM catalog_sync_baseline_episodes")
+        con.execute("INSERT INTO catalog_sync_baseline_items SELECT id,tipo,titulo,ano FROM items")
+        con.execute("INSERT INTO catalog_sync_baseline_episodes SELECT item_id,temp,ep,versao FROM episodes")
+        con.execute("UPDATE catalog_sync_meta SET baseline_ativo=1 WHERE id=1")
+    con.execute("UPDATE catalog_sync_status SET status='executando',fase='Iniciando',atual='Preparando feeds',"
+                "processados=0,total=0,feed=0,feeds=0,iniciado=CURRENT_TIMESTAMP,finalizado=NULL,erro=NULL,cancelar=0 WHERE id=1")
+    con.commit()
+
+    _checkpoint(con)
+    _prefetch(con, ["indice.txt"], optional=False)
     print("catálogo: baixando indice.txt...", flush=True)
     bases: dict[int, str] = {}
     index_lines = texto("indice.txt").splitlines()
@@ -416,8 +585,20 @@ def main() -> None:
         raise RuntimeError("indice.txt não lista letras do catálogo")
     print(f"catálogo: {len(letters)} letras encontradas; iniciando feeds de filmes e séries", flush=True)
     for letter_index, letter in enumerate(letters, start=1):
+        _checkpoint(con)
         print(f"catálogo: letra {letter_index}/{len(letters)} ({letter})", flush=True)
+        _prefetch(con, [f"filmes-{letter}.txt", f"series-{letter}.txt"])
         movie_lines = texto(f"filmes-{letter}.txt", optional=True).splitlines()
+        series_lines = texto(f"series-{letter}.txt", optional=True).splitlines()
+        part_numbers = set()
+        for series_line in series_lines:
+            columns = series_line.split("\t")
+            if len(columns) >= 4:
+                try:
+                    part_numbers.add(int(columns[2] or 0))
+                except ValueError:
+                    continue
+        _prefetch(con, [f"series-{letter}-{part}.txt" for part in sorted(part_numbers)], optional=False)
         for line in movie_lines:
             if not line.strip():
                 continue
@@ -425,11 +606,12 @@ def main() -> None:
             if title and (sources["dub"] or sources["leg"]):
                 item_id = upsert(con, "f", title, letter, "", sources)
                 con.execute("INSERT OR IGNORE INTO _sync_items VALUES(?)", (item_id,))
+                _record(con, title)
         con.commit()
         time.sleep(max(0, args.pausa))
 
-        series_lines = texto(f"series-{letter}.txt", optional=True).splitlines()
         for line in series_lines:
+            _checkpoint(con)
             columns = line.split("\t")
             if len(columns) < 4 or not columns[0].strip():
                 continue
@@ -440,6 +622,7 @@ def main() -> None:
                 continue
             item_id = upsert(con, "s", title, letter, year, {}, episode_count, part)
             con.execute("INSERT OR IGNORE INTO _sync_items VALUES(?)", (item_id,))
+            _record(con, title)
             part_key = (letter, part)
             if part_key not in series_parts:
                 raw_lines = texto(f"series-{letter}-{part}.txt").splitlines()
@@ -494,11 +677,14 @@ def main() -> None:
                                  json.dumps(sources, ensure_ascii=False)))
                     con.execute("INSERT OR IGNORE INTO _sync_episodes VALUES(?,?,?,?)",
                                 (item_id, int(fields[0]), int(fields[1]), version))
+                    _record(con, f"{title} S{int(fields[0]):02d}E{int(fields[1]):02d} [{version}]")
             con.commit()
             time.sleep(max(0, args.pausa))
         con.commit()
 
     print("metadados: baixando fichas.txt e destaques.txt...", flush=True)
+    _checkpoint(con)
+    _prefetch(con, ["fichas.txt", "destaques.txt"], optional=False)
     metadata_lines = texto("fichas.txt").splitlines()
     highlight_lines = texto("destaques.txt").splitlines()
     exact_items: dict[tuple[str, str], list[int]] = {}
@@ -564,6 +750,21 @@ def main() -> None:
           f"{metadata_with_poster} linhas com capa de {len(metadata_lines)} linhas", flush=True)
     if not matched_metadata:
         print("aviso: nenhuma ficha correspondeu ao catálogo; capas não serão baixadas")
+    _checkpoint(con)
+    if args.tmdb_fallback:
+        if args.refazer_cache_negativo:
+            removed = con.execute("DELETE FROM tmdb_poster_cache WHERE poster='' ").rowcount
+            con.commit()
+            print(f"cache TMDb: {removed} buscas sem capa serão repetidas", flush=True)
+        buscar_capas_tmdb(con)
+
+    if args.imagens:
+        def progresso_capas(done: int, total: int) -> None:
+            _checkpoint(con)
+            _status(con, phase="Baixando capas", current=f"Capa {done}/{total}")
+        baixar_capas(con, progresso_capas)
+
+    _checkpoint(con)
     if not _missing_optional_feed:
         con.execute("UPDATE items SET destaque=0")
         for line in highlight_lines:
@@ -575,23 +776,70 @@ def main() -> None:
                     "AND s.temp=episodes.temp AND s.ep=episodes.ep AND s.versao=episodes.versao)")
         con.execute("DELETE FROM episodes WHERE item_id NOT IN (SELECT id FROM _sync_items)")
         con.execute("DELETE FROM items WHERE id NOT IN (SELECT id FROM _sync_items)")
+        # Registra apenas diferenças em relação ao último catálogo concluído.
+        con.execute("DELETE FROM catalog_sync_changes")
+        con.execute("""INSERT INTO catalog_sync_changes(tipo,item_id,item_tipo,titulo,ano)
+            SELECT 'adicionado',i.id,i.tipo,i.titulo,i.ano FROM items i
+            LEFT JOIN catalog_sync_baseline_items b ON b.id=i.id WHERE b.id IS NULL""")
+        con.execute("""INSERT INTO catalog_sync_changes(tipo,item_id,item_tipo,titulo,ano,temp,ep,versao)
+            SELECT 'episodio_adicionado',e.item_id,i.tipo,i.titulo,i.ano,e.temp,e.ep,e.versao
+            FROM episodes e JOIN items i ON i.id=e.item_id
+            LEFT JOIN catalog_sync_baseline_episodes b ON b.item_id=e.item_id AND b.temp=e.temp
+              AND b.ep=e.ep AND b.versao=e.versao WHERE b.item_id IS NULL""")
+        con.execute("""INSERT INTO catalog_sync_changes(tipo,item_id,item_tipo,titulo,ano)
+            SELECT 'eliminado',b.id,b.tipo,b.titulo,b.ano FROM catalog_sync_baseline_items b
+            LEFT JOIN items i ON i.id=b.id WHERE i.id IS NULL""")
+        con.execute("DELETE FROM catalog_sync_baseline_items")
+        con.execute("DELETE FROM catalog_sync_baseline_episodes")
+        con.execute("UPDATE catalog_sync_meta SET baseline_ativo=0 WHERE id=1")
     else:
         print("aviso: sincronização incompleta; preservando registros antigos que poderiam estar ausentes")
+        # Mantém a lista da última execução completa até uma varredura íntegra.
     con.commit()
 
-    if args.tmdb_fallback:
-        if args.refazer_cache_negativo:
-            removed = con.execute("DELETE FROM tmdb_poster_cache WHERE poster='' ").rowcount
-            con.commit()
-            print(f"cache TMDb: {removed} buscas sem capa serão repetidas", flush=True)
-        buscar_capas_tmdb(con)
-
-    if args.imagens:
-        baixar_capas(con)
-
     count = con.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    if _missing_optional_feed:
+        _status(con, status="incompleto", phase="Concluído com feeds ausentes",
+                current=f"{count} títulos; novidades anteriores preservadas", force=True)
+    else:
+        _status(con, status="concluido", phase="Concluído", current=f"{count} títulos", force=True)
     con.close()
-    print(f"catálogo sincronizado: {count} itens ({DB})")
+    label = "catálogo parcialmente sincronizado" if _missing_optional_feed else "catálogo sincronizado"
+    print(f"{label}: {count} itens ({DB})")
+
+
+def main(args=None, progress_callback=None, cancel_event=None) -> None:
+    DB.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = Path(str(DB) + ".sync.lock")
+    lock_handle = lock_path.open("a+")
+    lock_acquired = False
+    try:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_acquired = True
+        except BlockingIOError as exc:
+            raise RuntimeError("já existe uma sincronização do catálogo em andamento") from exc
+        _main_impl(args, progress_callback, cancel_event)
+    except Exception as exc:
+        if lock_acquired:
+            try:
+                DB.parent.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(DB, timeout=30) as con:
+                    criar(con)
+                    status = "interrompido" if isinstance(exc, SyncCancelled) else "erro"
+                    con.execute("UPDATE catalog_sync_status SET status=?,fase=?,atual=?,erro=?,cancelar=0,"
+                                "finalizado=CURRENT_TIMESTAMP WHERE id=1",
+                                (status, "Interrompido" if status == "interrompido" else "Erro",
+                                 str(exc)[:300], str(exc)[:1000]))
+                    con.commit()
+            except Exception:
+                pass
+        raise
+    finally:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_handle.close()
 
 
 if __name__ == "__main__":

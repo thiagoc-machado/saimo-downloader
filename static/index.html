@@ -12,19 +12,20 @@
     .toolbar{max-width:1440px;margin:auto;padding:13px 22px;display:flex;align-items:center;gap:14px}.brand{font-size:17px;font-weight:750;letter-spacing:.02em;color:var(--accent);white-space:nowrap}
     .tabs{display:flex;gap:5px}.tab,.select,.search{border:1px solid var(--line);background:var(--panel);border-radius:9px;color:var(--text);padding:9px 12px}.tab.active{background:var(--accent);border-color:var(--accent);color:#071714;font-weight:700}
     .search{flex:1;min-width:120px;outline:none}.search:focus,.select:focus{border-color:var(--accent)}.select{max-width:145px}
-    main{max-width:1440px;margin:auto;padding:24px 22px 70px}.heading{display:flex;justify-content:space-between;align-items:end;margin:2px 0 17px}.heading h2{font-size:21px;margin:0}.subtle{color:var(--muted);font-size:13px}
+    main{max-width:1440px;margin:auto;padding:24px 50px 70px 22px}.heading{display:flex;justify-content:space-between;align-items:end;margin:2px 0 17px}.heading h2{font-size:21px;margin:0}.subtle{color:var(--muted);font-size:13px}
+    .alphabet-rail{position:fixed;z-index:4;right:max(calc((100vw - 1440px)/2 + 5px),5px);top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:1px;max-height:82vh;overflow-y:auto;overscroll-behavior:contain;padding:5px 3px;border:1px solid var(--line);border-radius:11px;background:#191e25eF;backdrop-filter:blur(10px);scrollbar-width:none}.alphabet-rail::-webkit-scrollbar{display:none}.alphabet-letter{width:23px;height:21px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--accent);font-size:11px;font-weight:700;line-height:21px}.alphabet-letter:hover:not(:disabled),.alphabet-letter.active{background:var(--accent);color:#071714}.alphabet-letter:disabled{color:#56616d;cursor:default}.alphabet-letter:focus-visible{outline:2px solid var(--accent);outline-offset:1px}.grid{scroll-margin-top:78px}
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(152px,1fr));gap:16px}.card{min-width:0;overflow:hidden;border:1px solid #252d36;border-radius:11px;background:var(--panel);transition:transform .16s,border-color .16s;cursor:pointer}.card:hover{transform:translateY(-3px);border-color:var(--accent)}
     .poster{display:block;width:100%;aspect-ratio:2/3;object-fit:cover;background:var(--panel2)}.poster-fallback{display:grid;place-items:center;color:#75818e;font-size:12px;text-align:center;padding:12px}.card-meta{padding:10px 11px 12px}.card-title{margin:0 0 3px;font-weight:650;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.card-sub{font-size:12px;color:var(--muted)}.card-badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}.card-badge{padding:2px 7px;border-radius:999px;background:#263c3a;color:var(--accent);font-size:10px;font-weight:700}.card-badge.active{background:#3a3323;color:#ffd47a}.card-badge.queued{background:#29344a;color:#b8d2ff}
     .empty{padding:54px 16px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:12px}.more{display:block;margin:22px auto 0;border:1px solid var(--line);background:var(--panel);border-radius:9px;padding:10px 18px}.more:disabled{opacity:.55;cursor:default}
     .download-layout{display:grid;grid-template-columns:minmax(260px,.8fr) minmax(0,1.5fr);gap:26px}.download-layout h3{font-size:15px;margin:0 0 12px}.job-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}.job-heading h3{margin:0}.list-actions{display:flex;flex-wrap:wrap;gap:7px}.list-action{border:1px solid var(--line);border-radius:7px;background:var(--panel2);padding:6px 9px;font-size:11px}.list-action:hover{border-color:var(--accent)}.list-action:disabled{opacity:.5;cursor:wait}.job-list-scroll{max-height:min(68vh,720px);overflow-y:auto;overscroll-behavior:contain;padding-right:4px}.stack{display:flex;flex-direction:column;gap:9px}.job{padding:12px 14px;border:1px solid var(--line);background:var(--panel);border-radius:10px}.job-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.job-name{flex:1;min-width:0;font-size:13px;font-weight:650;overflow-wrap:anywhere}.job-status{flex:none;max-width:48%;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:12px;white-space:nowrap}.job-failed{padding:8px 12px}.job-failed .job-top{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px}.job-failed .job-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:normal}.job-failed .job-status{max-width:150px;color:var(--danger)}.bar{height:5px;margin-top:10px;background:#303944;border-radius:10px;overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}.bar i.indeterminate{width:28%;animation:bar-progress 1.2s ease-in-out infinite alternate}@keyframes bar-progress{from{transform:translateX(0)}to{transform:translateX(250%)}}.job-error{color:var(--danger)}.job-actions{display:flex;gap:7px;margin-top:10px}.job-failed .job-actions{margin-top:6px}.job-action{border:1px solid var(--line);border-radius:7px;background:var(--panel2);padding:5px 9px;font-size:12px}.job-action:hover{border-color:var(--accent)}.job-action.danger:hover{border-color:var(--danger);color:var(--danger)}.job-action:disabled{opacity:.5;cursor:wait}.queue-pager,.file-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px}.file-tables{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}.file-table-wrap{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--panel)}.file-table-wrap h3{padding:12px 14px;margin:0;border-bottom:1px solid var(--line)}.file-table-scroll{max-height:380px;overflow:auto;overscroll-behavior:contain}.file-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}.file-table th,.file-table td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}.file-table thead{position:sticky;top:0;z-index:1;background:var(--panel)}.file-table th{color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}.file-table tr:last-child td{border-bottom:0}.file-table th:last-child,.file-table td:last-child{width:78px;text-align:right;white-space:nowrap}.file-table a{display:block;color:var(--accent);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-table a:hover{text-decoration:underline}.file-empty{text-align:center!important;color:var(--muted);padding:22px 10px!important}
     .job-metrics{display:flex;flex-wrap:wrap;gap:5px 12px;margin-top:8px;color:var(--muted);font-size:12px}.job-metrics strong{color:var(--text);font-weight:600}.download-summary{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin-top:24px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.summary-stat{min-width:0}.summary-label{display:block;color:var(--muted);font-size:11px}.summary-value{display:block;margin-top:3px;font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     dialog{width:min(850px,calc(100% - 28px));max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text)}dialog::backdrop{background:#050709c9;backdrop-filter:blur(3px)}.modal-content{padding:22px}.modal-content h2{font-size:22px;line-height:1.2;margin:0 34px 6px 0}.modal-desc{color:var(--muted);font-size:13px}.detail-hero{display:grid;grid-template-columns:126px minmax(0,1fr);gap:19px;align-items:start;padding-right:28px}.detail-poster{width:126px;aspect-ratio:2/3;object-fit:cover;border-radius:9px;background:var(--panel2)}.detail-poster[hidden]{display:none}.detail-cast{margin-top:12px;color:var(--muted);font-size:13px;line-height:1.6}.synopsis{font-size:14px;line-height:1.6;color:#d8dee5;margin:15px 0}.detail-section-title{font-size:14px;margin:17px 0 8px}.episode-guide{border-top:1px solid var(--line);padding-top:2px;margin-top:14px}.season-guide{border:1px solid var(--line);border-radius:9px;margin:8px 0;overflow:hidden}.season-guide summary{cursor:pointer;padding:10px 12px;background:var(--panel2);font-size:13px;font-weight:650}.episode-list{padding:4px 12px}.episode-row{display:grid;grid-template-columns:46px minmax(0,1fr);gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}.episode-row:last-child{border-bottom:0}.episode-number{font-weight:700;color:var(--text)}.episode-streams{display:flex;flex-wrap:wrap;gap:5px}.stream-badge{display:inline-flex;padding:2px 7px;border-radius:999px;background:#263c3a;color:var(--accent);font-size:11px}.stream-overview{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.fields{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:16px 0}.field{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}.field[hidden]{display:none}.field select,.field input{width:auto;max-width:190px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;color:var(--text)}.field input[type=radio]{accent-color:var(--accent)}.versions{display:flex;gap:16px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}.btn{border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:9px 14px}.btn.primary{background:var(--accent);border-color:var(--accent);color:#061613;font-weight:750}.close{position:absolute;right:17px;top:14px;width:34px;height:34px;border:0;border-radius:50%;background:transparent;color:var(--muted);font-size:23px}.close:hover{background:var(--panel2);color:var(--text)}
-    .notice{color:var(--muted);font-size:13px;margin-top:15px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .notice{color:var(--muted);font-size:13px;margin-top:15px}.btn.danger{border-color:#8a4545;color:#ffaaaa}.novelty-deleted{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}.novelty-row{padding:9px 12px;border-bottom:1px solid var(--line);font-size:13px}.novelty-row:last-child{border-bottom:0}.new-episode{background:#3a3323;color:#ffd47a}.sync-progress .bar{height:9px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
     .toast{position:fixed;right:20px;bottom:20px;z-index:20;max-width:min(440px,calc(100% - 32px));padding:12px 16px;border:1px solid #39786f;border-radius:10px;background:#19312e;color:#cafff5;box-shadow:0 8px 28px #0008}.toast[hidden]{display:none}
     .completed-panel,.storage-panel{margin-top:20px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.completed-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.completed-heading h3,.storage-heading{margin:0;font-size:14px}.completed-list{max-height:360px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:9px}.completed-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:12px}.completed-row:last-child{border-bottom:0}.completed-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.completed-date{flex:none;color:var(--muted);font-size:11px}.completed-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px}.storage-values{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px 14px;margin:9px 0;color:var(--muted);font-size:12px}.storage-values strong{color:var(--text);font-weight:650}.storage-bar{height:9px;overflow:hidden;border-radius:99px;background:#303944}.storage-bar-fill{height:100%;width:0;background:var(--accent);transition:width .3s}
     .credits{max-width:1440px;margin:0 auto;padding:14px 22px 24px;display:flex;align-items:center;gap:12px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}.credits img{display:block;width:64px;height:auto}.credits a{line-height:0}
     @media(max-width:950px){.download-summary{grid-template-columns:repeat(4,minmax(0,1fr))}}
-    @media(max-width:760px){.toolbar{flex-wrap:wrap;padding:11px 14px;gap:9px}.brand{margin-right:auto}.search{order:3;flex-basis:100%}.select{max-width:none}.grid{grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:11px}main{padding:19px 14px 50px}.download-layout,.file-tables{grid-template-columns:1fr;gap:23px}.download-summary{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:18px}.credits{padding:14px;font-size:11px}.credits img{width:56px}}
+    @media(max-width:760px){.toolbar{flex-wrap:wrap;padding:11px 14px;gap:9px}.brand{margin-right:auto}.search{order:3;flex-basis:100%}.select{max-width:none}.grid{grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:11px}main{padding:19px 35px 50px 14px}.alphabet-rail{right:2px;padding:4px 2px}.alphabet-letter{width:19px;height:19px;line-height:19px;font-size:10px}.download-layout,.file-tables{grid-template-columns:1fr;gap:23px}.download-summary{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:18px}.credits{padding:14px;font-size:11px}.credits img{width:56px}}
     .detail-hero.without-poster{grid-template-columns:minmax(0,1fr)}
     @media(max-width:480px){.modal-content{padding:17px}.detail-hero{grid-template-columns:82px minmax(0,1fr);gap:13px;padding-right:20px}.detail-hero.without-poster{grid-template-columns:minmax(0,1fr)}.detail-poster{width:82px}.episode-row{grid-template-columns:38px minmax(0,1fr)}}
   </style>
@@ -34,16 +35,28 @@
     <div class="brand">SAIMO LOCAL</div>
     <nav class="tabs" aria-label="Seções">
       <button class="tab active" data-tab="catalog">Catálogo</button>
+      <button class="tab" data-tab="novelties">Novidades</button>
       <button class="tab" data-tab="downloads">Downloads</button>
     </nav>
     <label class="sr-only" for="search">Buscar título</label><input id="search" class="search" type="search" placeholder="Buscar título…" autocomplete="off">
     <label class="sr-only" for="kind">Tipo</label><select id="kind" class="select"><option value="">Tudo</option><option value="f">Filmes</option><option value="s">Séries</option></select>
   </div></header>
+  <nav id="alphabet-rail" class="alphabet-rail" aria-label="Ir para títulos por letra" hidden></nav>
   <main>
     <section id="catalog-section">
-      <div class="heading"><div><h2>Catálogo</h2><div id="catalog-count" class="subtle">Carregando catálogo…</div></div></div>
+      <div class="heading"><div><h2>Catálogo</h2><div id="catalog-count" class="subtle">Carregando catálogo…</div></div><button id="catalog-sync-button" class="btn primary" type="button">Atualizar catálogo</button></div>
       <div id="grid" class="grid"></div><div id="empty" class="empty" hidden></div>
       <button id="more" class="more" hidden>Carregar mais</button>
+    </section>
+    <section id="novelties-section" hidden>
+      <div class="heading"><div><h2>Novidades</h2><div id="novelties-date" class="subtle">Última sincronização</div></div></div>
+      <h3>Adicionados e atualizados</h3>
+      <div id="novelties-grid" class="grid"></div>
+      <div id="novelties-empty" class="empty" hidden>Nenhuma novidade registrada na última sincronização.</div>
+      <h3 style="margin-top:26px">Eliminados</h3>
+      <div id="removed-list" class="novelty-deleted"></div>
+      <div id="removed-empty" class="empty" hidden>Nenhum filme ou série foi eliminado.</div>
+      <button id="novelties-more" class="more" hidden>Carregar mais</button>
     </section>
     <section id="downloads-section" hidden>
       <div class="heading"><div><h2>Downloads</h2><div id="destination" class="subtle"></div></div></div>
@@ -65,6 +78,23 @@
     </section>
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="catalog-sync-dialog"><button id="catalog-sync-close" class="close" aria-label="Fechar">×</button><div class="modal-content">
+    <h2>Atualizar catálogo</h2>
+    <p id="catalog-sync-description" class="modal-desc">A atualização consulta os feeds do catálogo, atualiza fontes, adiciona títulos e episódios novos, remove títulos que já não aparecem nos feeds completos e baixa capas pendentes. A primeira varredura pode levar horas.</p>
+    <div id="catalog-sync-progress" hidden>
+      <div class="job-metrics"><span id="catalog-sync-phase">Preparando…</span><span id="catalog-sync-count">0 itens</span><span id="catalog-sync-eta">Tempo restante: calculando…</span></div>
+      <div class="bar"><i id="catalog-sync-bar" style="width:0%"></i></div>
+      <p id="catalog-sync-current" class="notice"></p>
+      <p id="catalog-sync-error" class="job-error" hidden></p>
+    </div>
+    <div class="modal-actions">
+      <button id="catalog-sync-cancel" class="btn" type="button">Cancelar</button>
+      <button id="catalog-sync-stop" class="btn danger" type="button" hidden>Interromper atualização</button>
+      <button id="catalog-sync-dismiss" class="btn" type="button" hidden>Fechar sem interromper</button>
+      <button id="catalog-sync-start" class="btn primary" type="button">Iniciar atualização</button>
+      <button id="catalog-sync-done" class="btn primary" type="button" hidden>Fechar</button>
+    </div>
+  </div></dialog>
   <dialog id="details"><button id="close" class="close" aria-label="Fechar">×</button><form id="download-form" class="modal-content">
     <div id="detail-hero" class="detail-hero"><img id="detail-poster" class="detail-poster" alt="" hidden><div><h2 id="detail-title"></h2><div id="detail-meta" class="modal-desc"></div><div id="detail-cast" class="detail-cast" hidden></div></div></div>
     <p id="synopsis" class="synopsis" hidden></p>
@@ -83,6 +113,9 @@
     const $ = (selector) => document.querySelector(selector);
     let token = localStorage.getItem('saimo-token') || '';
     let page = 0, total = 0, loading = false, queryGeneration = 0, selectedItem = null, searchTimer;
+    let selectedLetter = '', pendingLetterScroll = false, alphabetCounts = {};
+    let noveltyPage = 0, noveltyTotalAdded = 0, noveltyTotalRemoved = 0, noveltyLoading = false;
+    let syncStartedAt = 0, activeTab = 'catalog', lastSyncStatus = null;
     let refreshingDownloads = false, lastFilesRefresh = 0, destinationLoaded = false;
     let completedPage = 0, completedTotal = -1, completedRefreshing = false, lastStorageRefresh = 0;
     let jobsPage = 0, jobsTotal = -1;
@@ -103,16 +136,63 @@
     let toastTimer;
     function showToast(text) { const toast=$('#toast'); toast.textContent=text; toast.hidden=false; clearTimeout(toastTimer); toastTimer=setTimeout(()=>{toast.hidden=true;},4000); }
     function resetCatalog() { queryGeneration += 1; page = 0; total = 0; $('#grid').replaceChildren(); $('#empty').hidden = true; $('#more').hidden = true; loadPage(); }
+    async function loadAlphabetIndex() {
+      try {
+        const data = await api(`/api/catalog/letters?tipo=${encodeURIComponent($('#kind').value)}`);
+        alphabetCounts = Object.fromEntries(data.letras.map(entry => [entry.letra, entry.total]));
+        const rail = $('#alphabet-rail'); rail.replaceChildren();
+        for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+          const button = document.createElement('button'); button.type = 'button'; button.className = 'alphabet-letter';
+          button.textContent = letter; button.dataset.letter = letter;
+          const count = alphabetCounts[letter] || 0;
+          button.disabled = count === 0;
+          button.title = count ? `${letter} · ${count.toLocaleString('pt-BR')} títulos` : `${letter} · sem títulos`;
+          button.setAttribute('aria-label', button.title);
+          button.setAttribute('aria-pressed', String(selectedLetter === letter));
+          button.classList.toggle('active', selectedLetter === letter);
+          button.addEventListener('click', () => {
+            if (selectedLetter === letter) { $('#grid').scrollIntoView({behavior:'smooth',block:'start'}); return; }
+            selectedLetter = letter; pendingLetterScroll = true; updateAlphabetSelection(); resetCatalog();
+          });
+          rail.append(button);
+        }
+        rail.hidden = activeTab !== 'catalog' || !Object.values(alphabetCounts).some(Boolean);
+      } catch (error) { console.warn('Não foi possível carregar o índice alfabético:', error); }
+    }
+    function updateAlphabetSelection() {
+      document.querySelectorAll('.alphabet-letter').forEach(button => {
+        const active = button.dataset.letter === selectedLetter;
+        button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
+      });
+    }
+    async function loadNovelties(reset = false) {
+      if (noveltyLoading) return;
+      if (reset) { noveltyPage=0; $('#novelties-grid').replaceChildren(); $('#removed-list').replaceChildren(); }
+      noveltyLoading=true;
+      try {
+        const data=await api(`/api/catalog/novelties?pagina=${noveltyPage}&limite=60`);
+        noveltyTotalAdded=data.total_adicionados; noveltyTotalRemoved=data.total_eliminados;
+        for(const item of data.adicionados)renderCard(item,'novelties-grid');
+        for(const item of data.eliminados){const row=document.createElement('div');row.className='novelty-row';row.textContent=`${item.item_tipo==='s'?'Série':'Filme'} · ${item.titulo}${item.ano?` (${item.ano})`:''}`;$('#removed-list').append(row);}
+        $('#novelties-date').textContent=data.sincronizado_em?`Última sincronização concluída: ${new Date(data.sincronizado_em+'Z').toLocaleString('pt-BR')}`:'Nenhuma sincronização concluída ainda';
+        $('#novelties-empty').hidden=noveltyTotalAdded>0;
+        $('#removed-empty').hidden=noveltyTotalRemoved>0;
+        noveltyPage++;
+        $('#novelties-more').hidden=noveltyPage*60>=Math.max(noveltyTotalAdded,noveltyTotalRemoved);
+      } catch(error){showToast(`Não foi possível carregar novidades: ${error.message}`);}
+      finally{noveltyLoading=false;}
+    }
     async function loadPage() {
       if (loading || (page > 0 && $('#grid').childElementCount >= total)) return;
       loading = true; const generation = queryGeneration; $('#more').disabled = true; $('#more').textContent = 'Carregando…';
       try {
         const params = new URLSearchParams({q: $('#search').value.trim(), tipo: $('#kind').value, pagina: String(page), limite: '60'});
+        if (selectedLetter) params.set('letra', selectedLetter);
         const result = await api(`/api/items?${params}`);
         if (generation !== queryGeneration) return;
         total = result.total;
         for (const entry of result.items) renderCard(entry);
-        $('#catalog-count').textContent = total ? `${total.toLocaleString('pt-BR')} títulos` : 'Nenhum título encontrado';
+        $('#catalog-count').textContent = total ? `${selectedLetter ? `${selectedLetter} · ` : ''}${total.toLocaleString('pt-BR')} títulos` : 'Nenhum título encontrado';
         $('#empty').hidden = result.items.length > 0 || page > 0;
         if (!result.items.length && page === 0) {
           message($('#empty'), result.catalogo_sincronizado
@@ -122,10 +202,11 @@
         page += 1;
         const hasMore = $('#grid').childElementCount < total;
         $('#more').hidden = !hasMore; $('#more').disabled = false; $('#more').textContent = 'Carregar mais';
+        if (pendingLetterScroll && page === 1) { pendingLetterScroll = false; $('#grid').scrollIntoView({behavior:'smooth',block:'start'}); }
       } catch (error) { if (generation === queryGeneration) { message($('#empty'), error.message); $('#empty').hidden = false; } }
       finally { loading = false; if (generation !== queryGeneration) loadPage(); }
     }
-    function renderCard(item) {
+    function renderCard(item, targetId='grid') {
       const card = document.createElement('article'); card.className = 'card'; card.dataset.itemId=String(item.id); card.tabIndex = 0; card.setAttribute('role', 'button');
       const image = document.createElement('img'); image.className = 'poster'; image.loading = 'lazy'; image.alt = `Pôster: ${item.titulo}`;
       if (item.poster) image.src = item.poster; else image.hidden = true;
@@ -136,8 +217,14 @@
       meta.append(title, sub);
       card.append(image, meta);
       updateCardBadges(card,{tipo:item.tipo,baixados:item.baixados,downloads_ativos:item.downloads_ativos,downloads_fila:item.downloads_fila});
+      if(targetId==='novelties-grid'){
+        let badges=card.querySelector('.card-badges');
+        if(!badges){badges=document.createElement('div');badges.className='card-badges';meta.append(badges);}
+        if(item.titulo_novo){const badge=document.createElement('span');badge.className='card-badge';badge.textContent='Novo título';badges.append(badge);}
+        if(Number(item.novos_episodios)>0){const badge=document.createElement('span');badge.className='card-badge new-episode';badge.textContent=`${item.novos_episodios} ${item.novos_episodios===1?'episódio novo':'episódios novos'}`;badges.append(badge);}
+      }
       card.addEventListener('click', () => openItem(item.id)); card.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openItem(item.id); } });
-      $('#grid').append(card);
+      $(`#${targetId}`).append(card);
     }
     function updateCardBadges(card,status) {
       card.querySelector('.card-badges')?.remove();
@@ -187,7 +274,7 @@
         if (!seasons.has(seasonNumber)) seasons.set(seasonNumber, new Map());
         const season = seasons.get(seasonNumber);
         if (!season.has(episodeNumber)) season.set(episodeNumber, new Map());
-        season.get(episodeNumber).set(episode.versao, [...new Set(sources.map(providerName))]);
+        season.get(episodeNumber).set(episode.versao, {providers:[...new Set(sources.map(providerName))],isNew:!!episode.novo_na_sincronizacao});
       }
       const seasonNumbers = [...seasons.keys()].sort((a,b) => a-b);
       guide.hidden = !seasonNumbers.length;
@@ -202,9 +289,10 @@
           const row = document.createElement('div'); row.className = 'episode-row';
           const number = document.createElement('span'); number.className = 'episode-number'; number.textContent = `E${String(episodeNumber).padStart(2, '0')}`;
           const streams = document.createElement('div'); streams.className = 'episode-streams';
-          for (const [version, providers] of versions) {
+          for (const [version, info] of versions) {
             const badge = document.createElement('span'); badge.className = 'stream-badge';
-            badge.textContent = `${versionLabel(version)} · ${providers.join(', ')}`; streams.append(badge);
+            badge.textContent = `${versionLabel(version)} · ${info.providers.join(', ')}`; streams.append(badge);
+            if(info.isNew){const fresh=document.createElement('span');fresh.className='stream-badge new-episode';fresh.textContent='Adicionado nesta sincronização';streams.append(fresh);}
           }
           row.append(number, streams); episodeList.append(row);
         }
@@ -291,11 +379,66 @@
       finally { $('#download').disabled = false; }
     });
     function showTab(name) {
-      const returningToCatalog=!$('#downloads-section').hidden&&name==='catalog';
-      const downloads = name === 'downloads'; $('#catalog-section').hidden = downloads; $('#downloads-section').hidden = !downloads;
+      const returningToCatalog=activeTab!=='catalog'&&name==='catalog';activeTab=name;
+      $('#catalog-section').hidden = name!=='catalog';$('#novelties-section').hidden=name!=='novelties';$('#downloads-section').hidden=name!=='downloads';
+      $('#search').hidden=name!=='catalog';$('#kind').hidden=name!=='catalog';$('#alphabet-rail').hidden=name!=='catalog'||!Object.values(alphabetCounts).some(Boolean);
       document.querySelectorAll('.tab').forEach(button => button.classList.toggle('active', button.dataset.tab === name));
-      if (downloads) refreshDownloads();
-      else if(returningToCatalog) resetCatalog();
+      if(name==='downloads')refreshDownloads();
+      else if(name==='novelties')loadNovelties(true);
+      else if(returningToCatalog)resetCatalog();
+    }
+    function updateSyncControls(state) {
+      const running=state.status==='executando';
+      const terminal=['concluido','incompleto','interrompido','erro'].includes(state.status);
+      $('#catalog-sync-button').textContent=running?'Atualizando · ver status':'Atualizar catálogo';
+      $('#catalog-sync-progress').hidden=!running&&!terminal;
+      $('#catalog-sync-start').hidden=running;
+      $('#catalog-sync-cancel').hidden=running||terminal;
+      $('#catalog-sync-stop').hidden=!running;
+      $('#catalog-sync-dismiss').hidden=!running;
+      $('#catalog-sync-done').hidden=!terminal;
+      $('#catalog-sync-phase').textContent=state.fase||'Preparado';
+      const processed=Number(state.processados)||0,total=Number(state.total)||0;
+      $('#catalog-sync-count').textContent=total?`${processed.toLocaleString('pt-BR')} de ${total.toLocaleString('pt-BR')} títulos e episódios`:`${processed.toLocaleString('pt-BR')} títulos e episódios processados`;
+      const pct=Number(state.porcentagem)||0;$('#catalog-sync-bar').style.width=`${pct}%`;$('#catalog-sync-bar').classList.toggle('indeterminate',running&&!total);
+      $('#catalog-sync-current').textContent=[state.atual,state.feeds?`Feed ${state.feed||0} de ${state.feeds}`:''].filter(Boolean).join(' · ');
+      const elapsed=syncStartedAt?Math.max(0,(Date.now()-syncStartedAt)/1000):0;
+      const remaining=elapsed&&processed>0&&total>processed?(total-processed)/(processed/elapsed):null;
+      $('#catalog-sync-eta').textContent=remaining?`Tempo restante estimado: ${formatDuration(remaining)}`:'Tempo restante: calculando…';
+      $('#catalog-sync-error').hidden=!state.erro;$('#catalog-sync-error').textContent=state.erro||'';
+      if(state.iniciado&&!syncStartedAt){const parsed=Date.parse(state.iniciado.replace(' ','T')+'Z');if(Number.isFinite(parsed))syncStartedAt=parsed;}
+      const justFinished=lastSyncStatus==='executando'&&['concluido','incompleto','interrompido','erro'].includes(state.status);
+      if(justFinished){
+        if(activeTab==='novelties')loadNovelties(true);
+        if(state.status==='concluido'||state.status==='incompleto'){resetCatalog();loadAlphabetIndex();}
+        syncStartedAt=0;
+      }
+      lastSyncStatus=state.status;
+    }
+    async function refreshCatalogSyncStatus() {
+      try {const state=await api('/api/catalog/sync/status');updateSyncControls(state);return state;}
+      catch(error){console.warn('Não foi possível consultar a sincronização do catálogo:',error);return null;}
+    }
+    async function openCatalogSync() {
+      const state=await refreshCatalogSyncStatus();
+      if(state?.status==='executando'){
+        $('#catalog-sync-description').textContent='A atualização está em andamento. Você pode acompanhar o progresso, interromper com segurança ou fechar esta janela sem interromper o processo.';
+      } else {
+        $('#catalog-sync-description').textContent='A atualização consulta os feeds do catálogo, atualiza fontes, adiciona títulos e episódios novos, remove títulos que já não aparecem nos feeds completos e baixa capas pendentes. A primeira varredura pode levar horas.';
+      }
+      if(!$('#catalog-sync-dialog').open)$('#catalog-sync-dialog').showModal();
+    }
+    async function startCatalogSync() {
+      $('#catalog-sync-start').disabled=true;
+      try {await api('/api/catalog/sync',{method:'POST'});syncStartedAt=Date.now();$('#catalog-sync-description').textContent='Atualização iniciada. A aplicação continua disponível enquanto o catálogo é processado.';await refreshCatalogSyncStatus();}
+      catch(error){showToast(error.message);}
+      finally{$('#catalog-sync-start').disabled=false;}
+    }
+    async function stopCatalogSync() {
+      $('#catalog-sync-stop').disabled=true;
+      try {await api('/api/catalog/sync/cancel',{method:'POST'});$('#catalog-sync-phase').textContent='Solicitação de interrupção enviada; aguardando ponto seguro.';}
+      catch(error){showToast(error.message);}
+      finally{$('#catalog-sync-stop').disabled=false;}
     }
     function formatSpeed(bytesPerSecond) {
       if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 B/s';
@@ -487,6 +630,14 @@
       $(selector).closest('.file-table-scroll').scrollTop=0;
     }
     document.querySelectorAll('.tab').forEach(button => button.addEventListener('click', () => showTab(button.dataset.tab)));
+    $('#catalog-sync-button').addEventListener('click',openCatalogSync);
+    $('#catalog-sync-start').addEventListener('click',startCatalogSync);
+    $('#catalog-sync-stop').addEventListener('click',stopCatalogSync);
+    $('#catalog-sync-cancel').addEventListener('click',()=>$('#catalog-sync-dialog').close());
+    $('#catalog-sync-dismiss').addEventListener('click',()=>$('#catalog-sync-dialog').close());
+    $('#catalog-sync-done').addEventListener('click',()=>$('#catalog-sync-dialog').close());
+    $('#catalog-sync-close').addEventListener('click',()=>$('#catalog-sync-dialog').close());
+    $('#novelties-more').addEventListener('click',()=>loadNovelties(false));
     $('#clear-completed').addEventListener('click',event=>clearJobs('completed',event.currentTarget));
     $('#clear-list').addEventListener('click',event=>clearJobs('list',event.currentTarget));
     $('#pause-all').addEventListener('click',event=>bulkJobAction('pause-all',event.currentTarget));
@@ -500,11 +651,11 @@
     $('#movie-next').addEventListener('click',()=>{filePages.movies++;renderFilePage('movies');});
     $('#series-prev').addEventListener('click',()=>{filePages.series=Math.max(0,filePages.series-1);renderFilePage('series');});
     $('#series-next').addEventListener('click',()=>{filePages.series++;renderFilePage('series');});
-    $('#kind').addEventListener('change', resetCatalog); $('#more').addEventListener('click', loadPage);
-    $('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer=setTimeout(resetCatalog,300); });
+    $('#kind').addEventListener('change', () => { selectedLetter='';pendingLetterScroll=false;updateAlphabetSelection();resetCatalog();loadAlphabetIndex(); }); $('#more').addEventListener('click', loadPage);
+    $('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer=setTimeout(() => { selectedLetter='';pendingLetterScroll=false;updateAlphabetSelection();resetCatalog(); },300); });
     $('#close').addEventListener('click', () => $('#details').close()); $('#cancel').addEventListener('click', () => $('#details').close());
     window.addEventListener('scroll', () => { if (!$('#catalog-section').hidden && window.innerHeight + window.scrollY >= document.body.offsetHeight - 650) loadPage(); });
-    loadPage(); setInterval(() => { if (!$('#downloads-section').hidden) refreshDownloads(); }, 2500); setInterval(() => refreshCardBadges(), 5000);
+    loadPage();loadAlphabetIndex();refreshCatalogSyncStatus();setInterval(refreshCatalogSyncStatus,2000);setInterval(() => { if (!$('#downloads-section').hidden) refreshDownloads(); }, 2500); setInterval(() => refreshCardBadges(), 5000);
   </script>
 </body>
 </html>
