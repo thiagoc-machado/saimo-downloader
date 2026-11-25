@@ -613,7 +613,7 @@ def cancel_catalog_sync(req: Request):
 def _catalog_sync_en_worker() -> None:
     import argparse
     import sync_en
-    args = argparse.Namespace(limite=300, paginas=5, temporadas=20,
+    args = argparse.Namespace(limite=300, paginas=8, temporadas=20,
                               pausa=0.3, somente_capas=False)
     try:
         sync_en.main(args=args, cancel_event=catalog_sync_cancel_en)

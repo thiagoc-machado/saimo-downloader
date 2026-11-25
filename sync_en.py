@@ -219,7 +219,7 @@ def main(args=None, cancel_event: threading.Event | None = None) -> dict:
     CANCEL = cancel_event or threading.Event()
     args = args or argparse.Namespace()
     limite = int(getattr(args, "limite", 300) or 300)
-    paginas = max(1, min(20, int(getattr(args, "paginas", 5) or 5)))
+    paginas = max(1, min(20, int(getattr(args, "paginas", 8) or 8)))
     temporadas_max = int(getattr(args, "temporadas", 20) or 20)
     pausa = float(getattr(args, "pausa", PAUSA) or PAUSA)
     so_capas = bool(getattr(args, "somente_capas", False))
@@ -300,7 +300,7 @@ def main(args=None, cancel_event: threading.Event | None = None) -> dict:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="sincroniza catálogo EN")
     ap.add_argument("--limite", type=int, default=300)
-    ap.add_argument("--paginas", type=int, default=5)
+    ap.add_argument("--paginas", type=int, default=8)
     ap.add_argument("--temporadas", type=int, default=20)
     ap.add_argument("--pausa", type=float, default=PAUSA)
     ap.add_argument("--somente-capas", action="store_true")

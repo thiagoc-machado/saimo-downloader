@@ -12,6 +12,7 @@
     .toolbar{max-width:1440px;margin:auto;padding:13px 22px;display:flex;align-items:center;gap:14px}.brand{font-size:17px;font-weight:750;letter-spacing:.02em;color:var(--accent);white-space:nowrap}
     .tabs{display:flex;gap:5px}.tab,.select,.search{border:1px solid var(--line);background:var(--panel);border-radius:9px;color:var(--text);padding:9px 12px}.tab.active{background:var(--accent);border-color:var(--accent);color:#071714;font-weight:700}
     .search{flex:1;min-width:120px;outline:none}.search:focus,.select:focus{border-color:var(--accent)}.select{max-width:145px}
+    .en-kind-filter{display:flex;gap:7px;margin:0 0 17px}.en-kind-filter[hidden]{display:none}.en-kind-filter button{border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--muted);padding:7px 14px;font-size:13px}.en-kind-filter button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#071714;font-weight:700}
     main{max-width:1440px;margin:auto;padding:24px 50px 70px 22px}.heading{display:flex;justify-content:space-between;align-items:end;margin:2px 0 17px}.heading h2{font-size:21px;margin:0}.subtle{color:var(--muted);font-size:13px}
     .alphabet-rail{position:fixed;z-index:4;right:max(calc((100vw - 1440px)/2 + 5px),5px);top:50%;transform:translateY(-50%);display:flex;flex-direction:column;align-items:center;gap:1px;max-height:82vh;overflow-y:auto;overscroll-behavior:contain;padding:5px 3px;border:1px solid var(--line);border-radius:11px;background:#191e25eF;backdrop-filter:blur(10px);scrollbar-width:none}.alphabet-rail::-webkit-scrollbar{display:none}.alphabet-letter{width:23px;height:21px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--accent);font-size:11px;font-weight:700;line-height:21px}.alphabet-letter:hover:not(:disabled),.alphabet-letter.active{background:var(--accent);color:#071714}.alphabet-letter:disabled{color:#56616d;cursor:default}.alphabet-letter:focus-visible{outline:2px solid var(--accent);outline-offset:1px}.grid{scroll-margin-top:78px}
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(152px,1fr));gap:16px}.card{min-width:0;overflow:hidden;border:1px solid #252d36;border-radius:11px;background:var(--panel);transition:transform .16s,border-color .16s;cursor:pointer}.card:hover{transform:translateY(-3px);border-color:var(--accent)}
@@ -46,6 +47,7 @@
   <main>
     <section id="catalog-section">
       <div class="heading"><div><h2 id="catalog-heading">Catálogo</h2><div id="catalog-count" class="subtle">Carregando catálogo…</div></div><div><button id="catalog-sync-button" class="btn primary" type="button">Atualizar catálogo</button><button id="en-sync-button" class="btn primary" type="button" hidden>Atualizar catálogo EN</button><button id="en-sync-cancel" class="btn danger" type="button" hidden>Interromper EN</button></div></div>
+      <nav id="en-kind-filter" class="en-kind-filter" aria-label="Filtrar catálogo EN por tipo" hidden><button type="button" data-en-kind="" aria-pressed="true">Tudo</button><button type="button" data-en-kind="f" aria-pressed="false">Filmes</button><button type="button" data-en-kind="s" aria-pressed="false">Séries</button></nav>
       <div id="en-sync-state" class="sync-progress" hidden><div class="job-metrics"><span id="en-sync-phase">Pronto para sincronizar.</span><span id="en-sync-count"></span></div><div class="bar"><i id="en-sync-bar" style="width:0%"></i></div><p id="en-sync-current" class="notice"></p><p id="en-sync-error" class="job-error" hidden></p></div>
       <div id="grid" class="grid"></div><div id="empty" class="empty" hidden></div>
       <button id="more" class="more" hidden>Carregar mais</button>
@@ -122,7 +124,7 @@
     const $ = (selector) => document.querySelector(selector);
     let token = localStorage.getItem('saimo-token') || '';
     let page = 0, total = 0, loading = false, queryGeneration = 0, selectedItem = null, searchTimer;
-    let selectedLetter = '', pendingLetterScroll = false, alphabetCounts = {};
+    let selectedLetter = '', pendingLetterScroll = false, alphabetCounts = {}, enKind = '';
     let noveltyPage = 0, noveltyTotalAdded = 0, noveltyTotalRemoved = 0, noveltyLoading = false;
     let syncStartedAt = 0, activeTab = 'catalog', lastSyncStatus = null;
     let refreshingDownloads = false, lastFilesRefresh = 0, destinationLoaded = false;
@@ -142,13 +144,19 @@
       return result;
     }
     function message(target, text) { target.textContent = text; }
+    function catalogKind() { return activeTab === 'en' ? enKind : $('#kind').value; }
+    function updateEnKindFilter() {
+      document.querySelectorAll('[data-en-kind]').forEach(button => {
+        button.setAttribute('aria-pressed', String(button.dataset.enKind === enKind));
+      });
+    }
     let toastTimer;
     function showToast(text) { const toast=$('#toast'); toast.textContent=text; toast.hidden=false; clearTimeout(toastTimer); toastTimer=setTimeout(()=>{toast.hidden=true;},4000); }
     function resetCatalog() { queryGeneration += 1; page = 0; total = 0; $('#grid').replaceChildren(); $('#catalog-count').textContent='Carregando…'; $('#empty').hidden = true; $('#more').hidden = true; loadPage(); }
     async function loadAlphabetIndex() {
       try {
         const idioma = activeTab === 'en' ? 'en' : 'pt';
-        const data = await api(`/api/catalog/letters?tipo=${encodeURIComponent($('#kind').value)}&idioma=${idioma}`);
+        const data = await api(`/api/catalog/letters?tipo=${encodeURIComponent(catalogKind())}&idioma=${idioma}`);
         alphabetCounts = Object.fromEntries(data.letras.map(entry => [entry.letra, entry.total]));
         const rail = $('#alphabet-rail'); rail.replaceChildren();
         for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
@@ -196,7 +204,7 @@
       if (loading || (page > 0 && $('#grid').childElementCount >= total)) return;
       loading = true; const generation = queryGeneration; $('#more').disabled = true; $('#more').textContent = 'Carregando…';
       try {
-        const params = new URLSearchParams({q: $('#search').value.trim(), tipo: $('#kind').value, pagina: String(page), limite: '60', idioma: activeTab === 'en' ? 'en' : 'pt'});
+        const params = new URLSearchParams({q: $('#search').value.trim(), tipo: catalogKind(), pagina: String(page), limite: '60', idioma: activeTab === 'en' ? 'en' : 'pt'});
         if (selectedLetter) params.set('letra', selectedLetter);
         const result = await api(`/api/items?${params}`);
         if (generation !== queryGeneration) return;
@@ -460,7 +468,7 @@
       const catalogChanged = wasCatalog && isCatalog && activeTab !== name;
       const enteringCatalog=!wasCatalog&&isCatalog;activeTab=name;
       $('#catalog-section').hidden = !isCatalog;$('#novelties-section').hidden=name!=='novelties';$('#downloads-section').hidden=name!=='downloads';
-      $('#search').hidden=!isCatalog;$('#kind').hidden=!isCatalog;$('#alphabet-rail').hidden=!isCatalog||!Object.values(alphabetCounts).some(Boolean);
+      $('#search').hidden=!isCatalog;$('#kind').hidden=!isCatalog||name==='en';$('#en-kind-filter').hidden=name!=='en';$('#alphabet-rail').hidden=!isCatalog||!Object.values(alphabetCounts).some(Boolean);updateEnKindFilter();
       $('#catalog-heading').textContent = name === 'en' ? 'Catálogo EN · áudio original' : 'Catálogo';
       $('#catalog-sync-button').hidden = name !== 'catalog'; $('#en-sync-button').hidden = name !== 'en';
       $('#en-sync-cancel').hidden = true;
@@ -745,6 +753,11 @@
     $('#series-prev').addEventListener('click',()=>{filePages.series=Math.max(0,filePages.series-1);renderFilePage('series');});
     $('#series-next').addEventListener('click',()=>{filePages.series++;renderFilePage('series');});
     $('#kind').addEventListener('change', () => { selectedLetter='';pendingLetterScroll=false;updateAlphabetSelection();resetCatalog();loadAlphabetIndex(); }); $('#more').addEventListener('click', loadPage);
+    document.querySelectorAll('[data-en-kind]').forEach(button => button.addEventListener('click', () => {
+      if (enKind === button.dataset.enKind) return;
+      enKind = button.dataset.enKind; updateEnKindFilter(); selectedLetter=''; pendingLetterScroll=false;
+      updateAlphabetSelection(); resetCatalog(); loadAlphabetIndex();
+    }));
     $('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer=setTimeout(() => { selectedLetter='';pendingLetterScroll=false;updateAlphabetSelection();resetCatalog(); },300); });
     $('#close').addEventListener('click', () => $('#details').close()); $('#cancel').addEventListener('click', () => $('#details').close());
     const returnToDetails=()=>{pendingDownloadBody=null;$('#en-download-dialog').close();if(selectedItem)$('#details').showModal();};

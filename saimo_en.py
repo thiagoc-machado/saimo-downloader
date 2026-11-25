@@ -202,9 +202,21 @@ def _vidsrc(src: dict, control) -> list[dict]:
 def _capture(src: dict, control) -> list[dict]:
     from playwright.sync_api import sync_playwright
     kind, tmdb = src["kind"], int(src["tmdb"])
-    embed = (f"https://vidsrc.sh/embed/tv/{tmdb}/{src['season']}/{src['episode']}"
-             if kind == "tv" else f"https://vidsrc.sh/embed/movie/{tmdb}")
-    capturados: list[str] = []
+    embed = (f"https://vidsrc.to/embed/tv/{tmdb}/{src['season']}/{src['episode']}"
+             if kind == "tv" else f"https://vidsrc.to/embed/movie/{tmdb}")
+    capturados: list[tuple[str, dict]] = []
+
+    def capturar_requisicao(requisicao) -> None:
+        url = requisicao.url
+        if ".m3u8" not in url.lower() or any(url == existente[0] for existente in capturados):
+            return
+        permitidos = {"user-agent", "referer", "origin", "cookie", "authorization",
+                      "accept", "accept-language"}
+        headers = {chave.title(): valor for chave, valor in requisicao.headers.items()
+                   if chave.lower() in permitidos}
+        headers.setdefault("Referer", embed)
+        capturados.append((url, headers))
+
     control.checkpoint()
     with sync_playwright() as p:
         navegador = p.chromium.launch(headless=True, args=["--mute-audio", "--no-sandbox"])
@@ -215,8 +227,7 @@ def _capture(src: dict, control) -> list[dict]:
             pagina = ctx.new_page()
             pagina.route(re.compile(r"(googletagmanager|histats|doubleclick|analytics)"),
                          lambda rota: rota.abort())
-            pagina.on("request", lambda r: capturados.append(r.url)
-                      if ".m3u8" in r.url and r.url not in capturados else None)
+            pagina.on("request", capturar_requisicao)
             pagina.goto(embed, wait_until="domcontentloaded", timeout=30000)
             for _ in range(24):
                 control.checkpoint()
@@ -233,9 +244,10 @@ def _capture(src: dict, control) -> list[dict]:
             navegador.close()
     if not capturados:
         raise ResolveError("capture_sem_m3u8")
-    master = next((u for u in capturados if "master" in u), capturados[0])
-    cand = _norm(master, {"Referer": embed, "Origin": "https://vidsrc.sh"},
-                 None, "capture")
+    master, headers = next(((url, req_headers) for url, req_headers in capturados
+                            if "master" in url.lower()), capturados[0])
+    headers.setdefault("Origin", "https://vidsrc.to")
+    cand = _norm(master, headers, None, "capture")
     try:
         manifest = _get(master, headers=cand["headers"]).text
         for linha in manifest.splitlines():
@@ -260,10 +272,13 @@ RESOLVEDORES: dict[str, Callable[[dict, object], list[dict]]] = {
 def resolver_fontes(sources: Iterable[dict], control, provider_offset: int = 0) -> list[dict]:
     saida: list[dict] = []
     descritores = [src for src in sources or [] if isinstance(src, dict)]
+    if not descritores:
+        raise ResolveError("sem_fontes", "lista de fontes vazia ou inválida")
     if descritores and provider_offset:
         inicio = provider_offset % len(descritores)
         descritores = descritores[inicio:] + descritores[:inicio]
     tentadas = 0
+    erros: list[str] = []
     for src in descritores:
         if tentadas >= MAX_PROVIDERS:
             break
@@ -275,15 +290,21 @@ def resolver_fontes(sources: Iterable[dict], control, provider_offset: int = 0) 
                 saida.extend(fn(src, control))
             elif ".m3u8" in str(src.get("url", "")):
                 saida.append(_norm(src["url"], src.get("headers")))
+            else:
+                raise ResolveError("provider_desconhecido", str(src.get("provider") or "sem provider"))
         except (ResolveError, requests.RequestException, subprocess.SubprocessError,
-                OSError, ValueError, KeyError):
+                OSError, ValueError, KeyError) as exc:
+            erros.append(f"{src.get('provider') or 'fonte'}: {str(exc)[:90]}")
             continue
         except (core.DownloadPaused, core.DownloadCancelled):
             raise
-        except Exception:
+        except Exception as exc:
+            erros.append(f"{src.get('provider') or 'fonte'}: {type(exc).__name__}")
             continue
         if len(saida) >= MAX_CANDIDATOS:
             break
+    if not saida and erros:
+        raise ResolveError("sem_fontes", "; ".join(erros[-2:]))
     return sorted(saida, key=lambda c: c.get("quality") or 0, reverse=True)
 
 
