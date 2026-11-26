@@ -18,6 +18,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Callable, Iterable
 from urllib.parse import quote, urljoin
+import threading
 
 import requests
 import saimo_core as core
@@ -29,6 +30,11 @@ MAX_H = int(os.getenv("SAIMO_EN_MAX_H", "1080"))
 YTDLP = os.getenv("SAIMO_YTDLP", "yt-dlp")
 MAX_PROVIDERS = max(1, min(3, int(os.getenv("SAIMO_EN_PROVIDERS", "3"))))
 MAX_CANDIDATOS = 8
+INTERVALO_CAPTURA = float(os.getenv("SAIMO_EN_INTERVALO", "4"))
+TENTATIVAS_429 = max(1, min(5, int(os.getenv("SAIMO_EN_429_RETRIES", "3"))))
+ESTADO_PW = Path(os.getenv("SAIMO_EN_STATE", "./data/pw_state.json")).expanduser()
+PROXY_PW = os.getenv("SAIMO_EN_PROXY", "").strip()
+
 OS_API_URL = "https://api.opensubtitles.com/api/v1"
 OS_API_KEY = (os.getenv("SAIMO_OPENSUBTITLES_API_KEY") or
               os.getenv("OPENSUBTITLES_API_KEY", "")).strip()
@@ -105,17 +111,86 @@ EMBEDS: dict[str, Callable[[str, int, int, int], str]] = {
 ORIGENS = {"vidsrc": "https://vidsrc.sh", "vidlink": "https://vidlink.pro",
            "embed_su": "https://embed.su", "moviesapi": "https://moviesapi.club"}
 
+_tls = threading.local()
+_lock_captura = threading.Lock()
+_ultimo_captura = 0.0
+_cache_info: dict[tuple, tuple[float, bool | None]] = {}
 
-def _info_ok(kind: str, tmdb: int, season: int, episode: int) -> bool | None:
-    rota = (f"https://vidsrc.sh/info/tv/{tmdb}/{season}/{episode}.json"
+
+def _vaga_captura() -> None:
+    global _ultimo_captura
+    with _lock_captura:
+        espera = INTERVALO_CAPTURA - (time.monotonic() - _ultimo_captura)
+        if espera > 0:
+            time.sleep(espera)
+        _ultimo_captura = time.monotonic()
+
+
+def _obter_browser():
+    navegador = getattr(_tls, "browser", None)
+    if navegador is not None and navegador.is_connected():
+        return navegador
+    from playwright.sync_api import sync_playwright
+    playwright = getattr(_tls, "playwright", None) or sync_playwright().start()
+    _tls.playwright = playwright
+    opcoes = {"headless": True, "args": ["--no-sandbox", "--mute-audio",
+                                         "--disable-dev-shm-usage", "--disable-gpu",
+                                         "--no-first-run"]}
+    if PROXY_PW:
+        opcoes["proxy"] = {"server": PROXY_PW}
+    _tls.browser = playwright.chromium.launch(**opcoes)
+    return _tls.browser
+
+
+def _abrir(pagina, url: str):
+    for tentativa in range(1, TENTATIVAS_429 + 1):
+        try:
+            resposta = pagina.goto(url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as exc:
+            texto = str(exc)
+            if "429" in texto:
+                if tentativa >= TENTATIVAS_429:
+                    raise ResolveError("capture_http_429")
+                time.sleep(5 * tentativa)
+                continue
+            if "imeout" in texto:
+                raise ResolveError("capture_timeout")
+            raise ResolveError("capture_navegacao", texto[:80])
+        if resposta is not None and resposta.status == 429:
+            if tentativa >= TENTATIVAS_429:
+                raise ResolveError("capture_http_429")
+            espera = 5 * tentativa
+            try:
+                cabecalho = resposta.headers.get("retry-after")
+                if cabecalho:
+                    espera = max(espera, min(60, int(cabecalho)))
+            except (ValueError, AttributeError):
+                pass
+            time.sleep(espera)
+            continue
+        return resposta
+    raise ResolveError("capture_http_429")
+
+
+def _info_ok(kind: str, tmdb: int, temporada: int = 0, episodio: int = 0) -> bool | None:
+    chave = (kind, int(tmdb), int(temporada), int(episodio))
+    agora = time.monotonic()
+    guardado = _cache_info.get(chave)
+    if guardado and agora - guardado[0] < 3600:
+        return guardado[1]
+    rota = (f"https://vidsrc.sh/info/tv/{tmdb}/{temporada}/{episodio}.json"
             if kind == "tv" else f"https://vidsrc.sh/info/movie/{tmdb}.json")
+    resultado: bool | None = None
     try:
         r = requests.get(rota, headers={"User-Agent": UA}, timeout=TIMEOUT)
+        if r.status_code == 200:
+            resultado = True
+        elif r.status_code == 404:
+            resultado = False
     except requests.RequestException:
-        return None
-    if r.status_code == 404:
-        return False
-    return True if r.status_code == 200 else None
+        resultado = None
+    _cache_info[chave] = (agora, resultado)
+    return resultado
 
 
 def _ytdlp(src: dict, control, offset: int = 0) -> list[dict]:
@@ -251,7 +326,6 @@ def _clicar_play(pagina) -> bool:
 
 
 def _captura_host(embed: str, origem: str, control) -> list[dict]:
-    from playwright.sync_api import sync_playwright
     capturados: list[tuple[str, dict]] = []
 
     def ao_pedir(requisicao) -> None:
@@ -263,36 +337,38 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
             return
         permitidos = {"user-agent", "referer", "origin", "cookie", "authorization",
                       "accept", "accept-language"}
-        headers = {c.title(): v for c, v in requisicao.headers.items()
-                   if c.lower() in permitidos}
+        headers = {c.title(): v for c, v in requisicao.headers.items() if c.lower() in permitidos}
         headers.setdefault("Referer", origem + "/")
         headers.setdefault("Origin", origem)
         capturados.append((url, headers))
 
-    with sync_playwright() as p:
-        navegador = p.chromium.launch(headless=True, args=[
-            "--no-sandbox", "--mute-audio", "--disable-dev-shm-usage",
-            "--disable-gpu", "--no-first-run"])
+    navegador = _obter_browser()
+    _vaga_captura()
+    estado = str(ESTADO_PW) if ESTADO_PW.is_file() else None
+    ctx = navegador.new_context(user_agent=UA, viewport={"width": 1280, "height": 720},
+                                locale="en-US", storage_state=estado)
+    try:
+        ctx.add_init_script(
+            "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+        pagina = ctx.new_page()
+        pagina.route(re.compile(r"(googletagmanager|histats|doubleclick|analytics)"),
+                     lambda rota: rota.abort())
+        pagina.on("request", ao_pedir)
+        _abrir(pagina, embed)
+        pagina.wait_for_timeout(1500)
+        for _ in range(30):
+            control.checkpoint()
+            if capturados:
+                break
+            _clicar_play(pagina)
+            pagina.wait_for_timeout(600)
         try:
-            ctx = navegador.new_context(user_agent=UA,
-                                        viewport={"width": 1280, "height": 720},
-                                        locale="en-US")
-            ctx.add_init_script(
-                "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
-            pagina = ctx.new_page()
-            pagina.route(re.compile(r"(googletagmanager|histats|doubleclick|analytics)"),
-                         lambda rota: rota.abort())
-            pagina.on("request", ao_pedir)
-            pagina.goto(embed, wait_until="domcontentloaded", timeout=30000)
-            pagina.wait_for_timeout(1500)
-            for _ in range(30):
-                control.checkpoint()
-                if capturados:
-                    break
-                _clicar_play(pagina)
-                pagina.wait_for_timeout(700)
-        finally:
-            navegador.close()
+            ESTADO_PW.parent.mkdir(parents=True, exist_ok=True)
+            ctx.storage_state(path=str(ESTADO_PW))
+        except Exception:
+            pass
+    finally:
+        ctx.close()
     if not capturados:
         raise ResolveError("capture_sem_m3u8")
     master, headers = next(((u, h) for u, h in capturados if ".m3u8" in u.lower()),
@@ -346,39 +422,44 @@ def resolver_fontes(sources: Iterable[dict], control, provider_offset: int = 0) 
     descritores = [src for src in sources or [] if isinstance(src, dict)]
     if not descritores:
         raise ResolveError("sem_fontes", "lista de fontes vazia ou inválida")
-    if descritores and provider_offset:
+    if provider_offset:
         inicio = provider_offset % len(descritores)
         descritores = descritores[inicio:] + descritores[:inicio]
     tentadas = 0
+    ja_capturou = False
     erros: list[str] = []
     for src in descritores:
         if tentadas >= MAX_PROVIDERS:
             break
+        provider = src.get("provider", "")
+        if provider in ("vidsrc", "capture"):
+            if ja_capturou:
+                continue
+            ja_capturou = True
         control.checkpoint()
         tentadas += 1
-        fn = RESOLVEDORES.get(src.get("provider", ""))
+        fn = RESOLVEDORES.get(provider)
         try:
             if fn:
                 saida.extend(fn(src, control, provider_offset))
             elif ".m3u8" in str(src.get("url", "")):
                 saida.append(_norm(src["url"], src.get("headers")))
             else:
-                raise ResolveError("provider_desconhecido", str(src.get("provider") or "sem provider"))
+                raise ResolveError("provider_desconhecido", str(provider or "sem provider"))
         except (ResolveError, requests.RequestException, subprocess.SubprocessError,
                 OSError, ValueError, KeyError) as exc:
-            erros.append(f"{src.get('provider') or 'fonte'}: {str(exc)[:90]}")
+            erros.append(f"{provider or 'fonte'}: {str(exc)[:90]}")
             continue
         except (core.DownloadPaused, core.DownloadCancelled):
             raise
         except Exception as exc:
-            erros.append(f"{src.get('provider') or 'fonte'}: {type(exc).__name__}")
+            erros.append(f"{provider or 'fonte'}: {type(exc).__name__}")
             continue
         if len(saida) >= MAX_CANDIDATOS:
             break
     if not saida and erros:
         raise ResolveError("sem_fontes", "; ".join(erros[-2:]))
     return sorted(saida, key=lambda c: c.get("quality") or 0, reverse=True)
-
 
 # ------------------------------------------------------------------ downloader
 
