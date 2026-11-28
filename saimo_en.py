@@ -2,7 +2,8 @@
 """Resolvedores EN para o saimo: yt-dlp, vidsrc, vidlink e captura HLS via Playwright.
 
 Retorna lista de candidatos {"url","headers","quality","provider","subs"}.
-Baixa previamente quando SAIMO_EN_PREDOWNLOAD=1 e devolve caminho local.
+Candidatos de vidlink/capture saem com provider "ytdlp" para que o worker
+use o downloader deste módulo em vez do downloader genérico.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -32,7 +34,7 @@ YTDLP = os.getenv("SAIMO_YTDLP", "yt-dlp")
 MAX_PROVIDERS = max(1, min(3, int(os.getenv("SAIMO_EN_PROVIDERS", "3"))))
 MAX_CANDIDATOS = 8
 BLOCO = int(os.getenv("SAIMO_EN_BLOCO", str(8 << 20)))
-PREDOWNLOAD = os.getenv("SAIMO_EN_PREDOWNLOAD", "1").strip() != "0"
+PREDOWNLOAD = os.getenv("SAIMO_EN_PREDOWNLOAD", "0").strip() == "1"
 CACHE_EN = Path(os.getenv("SAIMO_EN_CACHE", "./data/en_cache")).expanduser()
 OS_API_URL = "https://api.opensubtitles.com/api/v1"
 OS_API_KEY = (os.getenv("SAIMO_OPENSUBTITLES_API_KEY") or
@@ -51,6 +53,7 @@ RE_SHARD = re.compile(r"^(bcdn)(\d+)\.(.+)$")
 RE_FAIXA = re.compile(r"/(\d+)$")
 IGNORAR_HEADERS = {"host", "content-length", "range", "connection", "accept-encoding",
                    "if-none-match", "if-modified-since", "if-range", "te"}
+PROVEDORES_BAIXADOR = ("vidlink", "capture", "vidsrc")
 
 
 class ResolveError(Exception):
@@ -206,7 +209,10 @@ def _obter_browser():
                 return navegador
         except Exception:
             _reset_browser()
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise ResolveError("capture_browser", "playwright_ausente") from exc
     playwright = getattr(_tls, "playwright", None) or sync_playwright().start()
     _tls.playwright = playwright
     opcoes = {"headless": True, "args": ["--no-sandbox", "--mute-audio",
@@ -442,6 +448,28 @@ def _vidlink_api(src: dict, control, offset: int = 0) -> list[dict]:
     return _expandir(cand)
 
 
+def _vidlink_html(src: dict, control) -> list[dict]:
+    """Último recurso sem browser: baixa o HTML da página e varre mídia/JSON."""
+    kind, tmdb = src["kind"], int(src["tmdb"])
+    temporada = int(src.get("season") or 1)
+    episodio = int(src.get("episode") or 1)
+    pagina_url = (f"https://vidlink.pro/tv/{tmdb}/{temporada}/{episodio}" if kind == "tv"
+                  else f"https://vidlink.pro/movie/{tmdb}")
+    resposta = _get(pagina_url, "https://vidlink.pro/")
+    if resposta.status_code != 200:
+        raise ResolveError("vidlink_html", str(resposta.status_code))
+    urls = _midias_html(resposta.text)
+    for bloco in re.findall(r"__NEXT_DATA__[^>]*>(.*?)</script>", resposta.text, re.S):
+        try:
+            urls.extend(_varrer_midias(json.loads(bloco)))
+        except ValueError:
+            continue
+    urls = list(dict.fromkeys(urls))
+    if not urls:
+        raise ResolveError("vidlink_html_vazio")
+    return _expandir(_norm(urls[0], _cabecalho_midia(pagina_url), 1080, "vidlink"))
+
+
 def _vidlink_pela_pagina(src: dict, control) -> list[dict]:
     kind, tmdb = src["kind"], int(src["tmdb"])
     temporada = int(src.get("season") or 1)
@@ -455,16 +483,21 @@ def _vidlink_pela_pagina(src: dict, control) -> list[dict]:
 
     _vaga_captura()
     ctx = None
-    motivo = "capture_browser"
+    motivo = ""
     for _ in range(2):
         try:
             ctx = _abrir_contexto(_obter_browser())
             break
+        except ResolveError as exc:
+            motivo = f"{exc.code}: {exc}"
+            if exc.code == "capture_browser":
+                break
+            _reset_browser()
         except Exception as exc:
             motivo = f"capture_browser: {type(exc).__name__}"
             _reset_browser()
     if ctx is None:
-        raise ResolveError(motivo.split(":")[0], motivo.split(":", 1)[-1].strip())
+        raise ResolveError("capture_browser", motivo.split(":", 1)[-1].strip())
     try:
         pagina = ctx.new_page()
         pagina.route(re.compile(r"(googletagmanager|histats|doubleclick|analytics)"),
@@ -512,10 +545,17 @@ def _vidlink_pela_pagina(src: dict, control) -> list[dict]:
 
 
 def _vidlink(src: dict, control, offset: int = 0) -> list[dict]:
-    try:
-        return _vidlink_api(src, control, offset)
-    except ResolveError:
-        return _vidlink_pela_pagina(src, control)
+    erros = []
+    for nome, funcao, com_offset in (("api", _vidlink_api, True),
+                                     ("pagina", _vidlink_pela_pagina, False),
+                                     ("html", _vidlink_html, False)):
+        try:
+            return funcao(src, control, offset) if com_offset else funcao(src, control)
+        except ResolveError as exc:
+            erros.append(f"{nome}:{exc.code}")
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            erros.append(f"{nome}:{type(exc).__name__}")
+    raise ResolveError("vidlink", ",".join(erros))
 
 
 # ------------------------------------------------------------------ captura
@@ -550,6 +590,8 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
         try:
             ctx = _abrir_contexto(_obter_browser())
             break
+        except ResolveError:
+            raise
         except Exception as exc:
             ultima = exc
             _reset_browser()
@@ -795,14 +837,10 @@ def _capture(src: dict, control, offset: int = 0) -> list[dict]:
     episodio = int(src.get("episode") or 0)
     erros: list[str] = []
 
-    for nome, funcao, com_offset in (("vidlink_api", _vidlink_api, True),
-                                     ("vidlink_pagina", _vidlink_pela_pagina, False)):
-        try:
-            return funcao(src, control, offset) if com_offset else funcao(src, control)
-        except ResolveError as exc:
-            erros.append(f"{nome}:{exc.code}")
-        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
-            erros.append(f"{nome}:{type(exc).__name__}")
+    try:
+        return _vidlink(src, control, offset)
+    except ResolveError as exc:
+        erros.append(f"vidlink:{exc.code}")
 
     hosts = [h for h in EMBEDS if h != "vidlink"]
     if offset:
@@ -830,6 +868,65 @@ RESOLVEDORES: dict[str, Callable[..., list[dict]]] = {
 }
 
 
+def _preparar_candidatos(cands: list[dict]) -> list[dict]:
+    """Marca candidatos de browser/captura como 'ytdlp' para o worker usar
+    saimo_en.baixar_ytdlp (com headers, navegador e retomada) em vez de core.baixar."""
+    for cand in cands:
+        if cand.get("provider") in PROVEDORES_BAIXADOR:
+            cand["origem_provider"] = cand.get("provider")
+            cand.setdefault("origem", cand.get("url"))
+            cand["provider"] = "ytdlp"
+    return cands
+
+
+def resolver_fontes(sources: Iterable[dict], control, provider_offset: int = 0) -> list[dict]:
+    saida: list[dict] = []
+    descritores = [src for src in sources or [] if isinstance(src, dict)]
+    if not descritores:
+        raise ResolveError("sem_fontes", "lista de fontes vazia ou inválida")
+    if provider_offset:
+        inicio = provider_offset % len(descritores)
+        descritores = descritores[inicio:] + descritores[:inicio]
+    tentadas = 0
+    ja_capturou = False
+    erros: list[str] = []
+    for src in descritores:
+        if tentadas >= MAX_PROVIDERS:
+            break
+        provider = src.get("provider", "")
+        if provider in ("vidsrc", "capture"):
+            if ja_capturou:
+                continue
+            ja_capturou = True
+        control.checkpoint()
+        tentadas += 1
+        fn = RESOLVEDORES.get(provider)
+        try:
+            if fn:
+                saida.extend(fn(src, control, provider_offset))
+            elif ".m3u8" in str(src.get("url", "")):
+                saida.append(_norm(src["url"], src.get("headers")))
+            else:
+                raise ResolveError("provider_desconhecido", str(provider or "sem provider"))
+        except (ResolveError, requests.RequestException, subprocess.SubprocessError,
+                OSError, ValueError, KeyError, TypeError) as exc:
+            erros.append(f"{provider or 'fonte'}: {str(exc)[:90]}")
+            continue
+        except (core.DownloadPaused, core.DownloadCancelled):
+            raise
+        except Exception as exc:
+            erros.append(f"{provider or 'fonte'}: {type(exc).__name__}")
+            continue
+        if len(saida) >= MAX_CANDIDATOS:
+            break
+    if not saida:
+        raise ResolveError("sem_fontes", "; ".join(erros[-2:]) or "nenhuma fonte")
+    saida = _preparar_candidatos(saida)
+    if PREDOWNLOAD:
+        saida = _predownload(saida, control)
+    return sorted(saida, key=lambda c: c.get("quality") or 0, reverse=True)
+
+
 # ------------------------------------------------------------------ downloader
 
 def _progresso(linha: str) -> tuple[int, int] | None:
@@ -848,6 +945,8 @@ def _progresso(linha: str) -> tuple[int, int] | None:
 
 
 def _headers_download(cand: dict) -> dict:
+    if not str(cand.get("url", "")).startswith("http"):
+        return {}
     headers = cand.get("headers") if isinstance(cand.get("headers"), dict) else {}
     cab = {k: v for k, v in headers.items() if v}
     cab.setdefault("Accept", "*/*")
@@ -868,6 +967,19 @@ def _espera_429(cabecalho: str | None, tentativa: int) -> float:
     except (TypeError, ValueError):
         pass
     return espera
+
+
+def _baixar_local(cand: dict, temporary: Path, progress, control) -> bool:
+    origem = Path(str(cand["url"]))
+    if not origem.is_file():
+        return False
+    try:
+        shutil.copyfile(origem, temporary)
+    except OSError:
+        return False
+    total = temporary.stat().st_size
+    progress(total, total, total, total)
+    return total > 0
 
 
 def _baixar_navegador(cand: dict, temporary: Path, progress, control) -> bool:
@@ -939,8 +1051,10 @@ def _baixar_ffmpeg(cand: dict, final: Path, temporary: Path, progress, control) 
     cab = _headers_download(cand)
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
            "-rw_timeout", "25000000", "-reconnect", "1", "-reconnect_streamed", "1",
-           "-reconnect_delay_max", "8", "-headers", _format_headers(cab),
-           "-i", str(cand["url"])]
+           "-reconnect_delay_max", "8"]
+    if cab:
+        cmd += ["-headers", _format_headers(cab)]
+    cmd += ["-i", str(cand["url"])]
     if cand.get("audio_url"):
         cmd += ["-rw_timeout", "25000000",
                 "-headers", _format_headers(cand.get("audio_headers") or cab),
@@ -1054,9 +1168,17 @@ def _baixar_ytdlp(cand: dict, alvo: Path, progress, control) -> str | None:
 
 
 def baixar_ytdlp(cand: dict, output_base: str, progress, control) -> str | None:
-    """Baixa o candidato EN: navegador, ffmpeg, requests e yt-dlp em cascata."""
+    """Baixa o candidato: local, navegador, ffmpeg, requests e yt-dlp em cascata."""
     alvo = Path(output_base)
     alvo.parent.mkdir(parents=True, exist_ok=True)
+    if str(cand.get("url", "")).startswith("/"):
+        final = Path(str(alvo) + ".mp4")
+        temporary = Path(str(final) + ".part")
+        temporary.unlink(missing_ok=True)
+        if _baixar_local(cand, temporary, progress, control):
+            os.replace(temporary, final)
+            return str(final)
+        return None
     progressivo = bool(re.search(r"\.(mp4|m4v|webm|mkv|m4a)(\?|$)",
                                  str(cand.get("url", "")).lower()))
     if cand.get("audio_url") or progressivo:
@@ -1102,15 +1224,13 @@ def _limpar_cache(dias: int = 2) -> None:
 
 def _predownload(cands: list[dict], control, progress=None) -> list[dict]:
     """Baixa o primeiro candidato que funcionar e devolve caminho local."""
-    if not PREDOWNLOAD or not cands:
-        return cands
-    if cands[0].get("url", "").startswith("/"):
+    if not cands or str(cands[0].get("url", "")).startswith("/"):
         return cands
     CACHE_EN.mkdir(parents=True, exist_ok=True)
     _limpar_cache()
     vazio = progress or (lambda *a: None)
     for cand in cands[:3]:
-        destino = CACHE_EN / hashlib.sha1(cand["url"].encode()).hexdigest()[:20]
+        destino = CACHE_EN / hashlib.sha1(str(cand["url"]).encode()).hexdigest()[:20]
         arquivo = baixar_ytdlp(cand, str(destino), vazio, control)
         if arquivo:
             local = dict(cand)
@@ -1121,52 +1241,6 @@ def _predownload(cands: list[dict], control, progress=None) -> list[dict]:
             resto = [c for c in cands if c is not cand]
             return [local] + resto
     return cands
-
-
-def resolver_fontes(sources: Iterable[dict], control, provider_offset: int = 0) -> list[dict]:
-    saida: list[dict] = []
-    descritores = [src for src in sources or [] if isinstance(src, dict)]
-    if not descritores:
-        raise ResolveError("sem_fontes", "lista de fontes vazia ou inválida")
-    if provider_offset:
-        inicio = provider_offset % len(descritores)
-        descritores = descritores[inicio:] + descritores[:inicio]
-    tentadas = 0
-    ja_capturou = False
-    erros: list[str] = []
-    for src in descritores:
-        if tentadas >= MAX_PROVIDERS:
-            break
-        provider = src.get("provider", "")
-        if provider in ("vidsrc", "capture"):
-            if ja_capturou:
-                continue
-            ja_capturou = True
-        control.checkpoint()
-        tentadas += 1
-        fn = RESOLVEDORES.get(provider)
-        try:
-            if fn:
-                saida.extend(fn(src, control, provider_offset))
-            elif ".m3u8" in str(src.get("url", "")):
-                saida.append(_norm(src["url"], src.get("headers")))
-            else:
-                raise ResolveError("provider_desconhecido", str(provider or "sem provider"))
-        except (ResolveError, requests.RequestException, subprocess.SubprocessError,
-                OSError, ValueError, KeyError, TypeError) as exc:
-            erros.append(f"{provider or 'fonte'}: {str(exc)[:90]}")
-            continue
-        except (core.DownloadPaused, core.DownloadCancelled):
-            raise
-        except Exception as exc:
-            erros.append(f"{provider or 'fonte'}: {type(exc).__name__}")
-            continue
-        if len(saida) >= MAX_CANDIDATOS:
-            break
-    if not saida:
-        raise ResolveError("sem_fontes", "; ".join(erros[-2:]) or "nenhuma fonte")
-    saida = sorted(saida, key=lambda c: c.get("quality") or 0, reverse=True)
-    return _predownload(saida, control)
 
 
 # ------------------------------------------------------------------ legendas
@@ -1300,15 +1374,17 @@ def _cli() -> int:
         print(f"falhou: {exc}", file=sys.stderr)
         return 1
     for c in cands:
-        print(json.dumps({k: c.get(k) for k in ("provider", "quality", "url")},
+        print(json.dumps({"provider": c.get("origem_provider") or c.get("provider"),
+                          "quality": c.get("quality"), "url": c.get("url")},
                          ensure_ascii=False))
     if args.acao == "baixar" and cands:
         def prog(d, t, *_):
             print(f"\r{d * 100 / t:5.1f}%", end="", flush=True)
         print()
         for cand in cands:
-            if cand.get("local"):
-                print(cand["local"])
+            saida = baixar_ytdlp(cand, args.out, prog, Controle())
+            if saida:
+                print(saida)
                 return 0
         print("falhou")
         return 1
