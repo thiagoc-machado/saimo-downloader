@@ -336,7 +336,8 @@ def _diagnostico_url(value: str) -> str:
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         port = f":{parsed.port}" if parsed.port else ""
-        path = parsed.path[:300]
+        path = re.sub(r"(?i)/(token|key|api-key|signature|sig|auth|session|jwt)/[^/]+",
+                      r"/\1/[REDACTED]", parsed.path)[:300]
         return f"{parsed.scheme}://{host}{port}{path}{suffix}"
     except (ValueError, UnicodeError):
         return "[URL omitida]" + suffix
@@ -354,6 +355,18 @@ def _sanitizar_diagnostico_texto(value: object, limite: int = 6000) -> str:
     return text[:limite]
 
 
+def _sanitizar_diagnostico_objeto(value: object):
+    if isinstance(value, str):
+        return _sanitizar_diagnostico_texto(value)
+    if isinstance(value, list):
+        return [_sanitizar_diagnostico_objeto(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _sanitizar_diagnostico_objeto(item) for key, item in value.items()}
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    return _sanitizar_diagnostico_texto(value)
+
+
 def _resumo_fontes_diagnostico(sources: object) -> list[dict]:
     if not isinstance(sources, list):
         return []
@@ -366,21 +379,28 @@ def _resumo_fontes_diagnostico(sources: object) -> list[dict]:
             output.append({"tipo": type(source).__name__})
             continue
         item = {}
-        for key in ("provider", "kind", "tmdb", "tmdb_id", "season", "episode", "max_h"):
+        for key in ("provider", "kind", "tmdb", "tmdb_id", "season", "episode", "max_h",
+                    "quality", "height", "duration"):
             value = source.get(key)
             if isinstance(value, (str, int, float, bool)):
                 item[key] = value
-        for key in ("url", "embed", "embed_url", "referer", "referrer"):
+        for key in ("url", "audio_url", "embed", "embed_url", "referer", "referrer"):
             value = source.get(key)
             if isinstance(value, str) and value:
                 item[key] = _sanitizar_diagnostico_texto(value, 500)
         header_names = set()
+        safe_header_values = {}
         for key in ("headers", "http_headers", "audio_headers"):
             value = source.get(key)
             if isinstance(value, dict):
                 header_names.update(str(name)[:100] for name in value)
+                for name, header_value in value.items():
+                    if str(name).lower() in ("referer", "origin", "user-agent") and isinstance(header_value, str):
+                        safe_header_values[str(name)] = _sanitizar_diagnostico_texto(header_value, 500)
         if header_names:
             item["headers_enviados_nomes"] = sorted(header_names)
+        if safe_header_values:
+            item["headers_visiveis_sanitizados"] = safe_header_values
         output.append(item or {"tipo": "descritor sem campos reconhecidos"})
     return output
 
@@ -416,11 +436,14 @@ def _runtime_diagnostico() -> dict:
         except PackageNotFoundError:
             return None
 
-    browser_root = Path(os.getenv("PLAYWRIGHT_BROWSERS_PATH") or Path.home() / ".cache/ms-playwright")
     chromium_candidates = []
-    for pattern in ("chromium-*/chrome-linux/chrome", "chromium-*/chrome-linux64/chrome",
-                    "chromium-*/chrome-win/chrome.exe", "chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"):
-        chromium_candidates.extend(browser_root.glob(pattern))
+    try:
+        browser_root = Path(os.getenv("PLAYWRIGHT_BROWSERS_PATH") or Path.home() / ".cache/ms-playwright")
+        for pattern in ("chromium-*/chrome-linux/chrome", "chromium-*/chrome-linux64/chrome",
+                        "chromium-*/chrome-win/chrome.exe", "chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"):
+            chromium_candidates.extend(browser_root.glob(pattern))
+    except (OSError, RuntimeError):
+        pass
     try:
         disk_free = shutil.disk_usage(core.DESTINO).free
     except OSError:
@@ -456,7 +479,8 @@ def _montar_diagnostico_job(job_id: int, title: str, task_data: dict, phase: str
                             error: object, attempts: list[dict] | None = None,
                             exception_type: str | None = None,
                             traceback_text: str | None = None,
-                            progress: dict | None = None) -> dict:
+                            progress: dict | None = None,
+                            created_at: str | None = None) -> dict:
     task_data = task_data if isinstance(task_data, dict) else {}
     sources = task_data.get("sources")
     output_base = task_data.get("output_base")
@@ -472,13 +496,18 @@ def _montar_diagnostico_job(job_id: int, title: str, task_data: dict, phase: str
         "arquivo_destino": Path(str(output_base)).name if output_base else None,
         "quantidade_fontes": len(sources) if isinstance(sources, list) else None,
         "fontes": _resumo_fontes_diagnostico(sources),
+        "candidatos_resolvidos": _resumo_fontes_diagnostico(
+            task_data.get("_diagnostic_resolved_candidates")),
     }
     clean_attempts = attempts if attempts is not None else _tentativas_do_erro(error)
+    request_data = _sanitizar_diagnostico_objeto(request_data)
+    clean_attempts = _sanitizar_diagnostico_objeto(clean_attempts)
     return {
         "versao_schema": 1,
         "capturado_em": datetime.now(timezone.utc).isoformat(),
         "job": {"id": int(job_id), "titulo": _sanitizar_diagnostico_texto(title, 300),
-                "estado": "erro", "fase": _sanitizar_diagnostico_texto(phase, 120)},
+                "estado": "erro", "fase": _sanitizar_diagnostico_texto(phase, 120),
+                "criado_em": created_at},
         "falha": {"tipo": exception_type or "DownloadError",
                   "mensagem": _sanitizar_diagnostico_texto(error, 3000)},
         "progresso": progress or {},
@@ -494,11 +523,12 @@ def _salvar_diagnostico_job(con: sqlite3.Connection, job_id: int, title: str,
                             attempts: list[dict] | None = None,
                             exception_type: str | None = None,
                             traceback_text: str | None = None) -> str:
-    row = con.execute("SELECT pct,bytes_done,bytes_total FROM jobs WHERE id=?", (job_id,)).fetchone()
+    row = con.execute("SELECT criado,pct,bytes_done,bytes_total FROM jobs WHERE id=?", (job_id,)).fetchone()
     progress = ({"percentual": row["pct"], "bytes_baixados": row["bytes_done"],
                  "bytes_totais": row["bytes_total"]} if row else {})
     report = _montar_diagnostico_job(job_id, title, task_data, phase, error, attempts,
-                                     exception_type, traceback_text, progress)
+                                     exception_type, traceback_text, progress,
+                                     row["criado"] if row else None)
     return json.dumps(report, ensure_ascii=False)
 
 
@@ -539,6 +569,7 @@ def worker() -> None:
                     sources, control, int(task_data.get("provider_offset") or 0))
             else:
                 resolved = core.resolver_fontes(sources, control)
+            task_data["_diagnostic_resolved_candidates"] = resolved
             if not resolved:
                 error_message = "sem fonte disponível"
                 diagnostic = _salvar_diagnostico_job(
@@ -628,9 +659,8 @@ def worker() -> None:
                     diagnostic = _salvar_diagnostico_job(
                         con, job_id, title, task_data, phase, error_message,
                     attempts=attempts or _tentativas_do_erro(error_message, phase))
-                    con.execute("UPDATE jobs SET status='erro', erro=? WHERE id=?",
-                                (_sanitizar_diagnostico_texto(error_message, 1000), job_id))
-                    con.execute("UPDATE jobs SET diagnostico=? WHERE id=?", (diagnostic, job_id))
+                    con.execute("UPDATE jobs SET status='erro',erro=?,diagnostico=? WHERE id=?",
+                                (_sanitizar_diagnostico_texto(error_message, 1000), diagnostic, job_id))
                 con.commit()
         except core.DownloadPaused:
             row = con.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
