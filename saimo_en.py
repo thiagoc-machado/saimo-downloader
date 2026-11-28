@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolvedores EN para o saimo: yt-dlp, vidsrc e captura HLS via Playwright.
+"""Resolvedores EN para o saimo: yt-dlp, vidsrc, vidlink API e captura HLS via Playwright.
 
 Retorna lista de candidatos {"url","headers","quality","provider","subs"}.
 Nunca abre browser quando há caminho por requests. Uso interno apenas.
@@ -161,6 +161,12 @@ def _obter_browser():
     return _tls.browser
 
 
+def _abrir_contexto(navegador):
+    estado = str(ESTADO_PW) if ESTADO_PW.is_file() else None
+    return navegador.new_context(user_agent=UA, viewport={"width": 1280, "height": 720},
+                                 locale="en-US", storage_state=estado)
+
+
 def _abrir(pagina, url: str):
     for tentativa in range(1, TENTATIVAS_429 + 1):
         try:
@@ -237,6 +243,27 @@ def _clicar_play(pagina) -> bool:
     return False
 
 
+def _colher_video(pagina, capturados: list) -> None:
+    for quadro in pagina.frames:
+        try:
+            achados = quadro.evaluate(
+                "Array.from(document.querySelectorAll('video,source'))"
+                ".map(e => e.currentSrc || e.src || '')")
+        except Exception:
+            continue
+        for url in achados or []:
+            if not isinstance(url, str) or not url.startswith("http"):
+                continue
+            if ".m3u8" not in url.lower() and ".mp4" not in url.lower():
+                continue
+            if any(url == par[0] for par in capturados):
+                continue
+            capturados.append((url, {"Referer": pagina.url or "", "Accept": "*/*",
+                                     "User-Agent": UA, "Sec-Fetch-Dest": "video",
+                                     "Sec-Fetch-Mode": "no-cors",
+                                     "Sec-Fetch-Site": "cross-site"}))
+
+
 def _desafio(pagina) -> bool:
     try:
         titulo = (pagina.title() or "").lower()
@@ -283,6 +310,52 @@ def _validar(cand: dict) -> None:
         resposta.close()
 
 
+# ------------------------------------------------------------------ vidlink api
+
+def _vidlink_api(src: dict, control) -> list[dict]:
+    kind, tmdb = src["kind"], int(src["tmdb"])
+    temporada = int(src.get("season") or 1)
+    episodio = int(src.get("episode") or 1)
+    if kind == "tv":
+        url = f"https://vidlink.pro/api/b/tv/{tmdb}/{temporada}/{episodio}"
+    else:
+        url = f"https://vidlink.pro/api/b/movie/{tmdb}"
+    cab = {"User-Agent": UA, "Accept": "*/*", "Referer": "https://vidlink.pro/",
+           "Origin": "https://vidlink.pro"}
+    dados = None
+    ultimo = "vidlink_api"
+    for tentativa in range(2):
+        control.checkpoint()
+        try:
+            r = requests.post(url, headers={**cab, "Content-Type": "application/json"},
+                              json={}, timeout=TIMEOUT)
+            if r.status_code == 200:
+                dados = r.json()
+                break
+            ultimo = f"http_{r.status_code}"
+        except (requests.RequestException, ValueError) as exc:
+            ultimo = type(exc).__name__
+        time.sleep(1.2)
+    if not isinstance(dados, dict):
+        raise ResolveError("vidlink_api", str(ultimo))
+    fluxo = dados.get("stream") if isinstance(dados.get("stream"), dict) else dados
+    playlist = fluxo.get("playlist") or fluxo.get("source") or dados.get("playlist")
+    if not playlist:
+        raise ResolveError("vidlink_sem_fonte")
+    cand = _norm(str(playlist), dict(cab), 1080, "vidlink")
+    for legenda in fluxo.get("captions") or []:
+        if not isinstance(legenda, dict):
+            continue
+        uri = legenda.get("file") or legenda.get("url")
+        if uri:
+            cand["subs"].append({"lang": str(legenda.get("language") or "?"),
+                                 "url": urljoin(str(playlist), str(uri))})
+    _validar(cand)
+    return [cand]
+
+
+# ------------------------------------------------------------------ captura
+
 def _captura_host(embed: str, origem: str, control) -> list[dict]:
     capturados: list[tuple[str, dict]] = []
 
@@ -304,19 +377,17 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
         capturados.append((url, headers))
 
     _vaga_captura()
-    try:
-        navegador = _obter_browser()
-    except Exception as exc:
-        _reset_browser()
-        raise ResolveError("capture_browser", type(exc).__name__)
-
-    estado = str(ESTADO_PW) if ESTADO_PW.is_file() else None
-    try:
-        ctx = navegador.new_context(user_agent=UA, viewport={"width": 1280, "height": 720},
-                                    locale="en-US", storage_state=estado)
-    except Exception as exc:
-        _reset_browser()
-        raise ResolveError("capture_browser", type(exc).__name__)
+    ctx = None
+    ultima: Exception | None = None
+    for _ in range(2):
+        try:
+            ctx = _abrir_contexto(_obter_browser())
+            break
+        except Exception as exc:
+            ultima = exc
+            _reset_browser()
+    if ctx is None:
+        raise ResolveError("capture_browser", type(ultima).__name__ if ultima else "")
 
     try:
         ctx.add_init_script(
@@ -342,19 +413,21 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
                 break
             pagina.wait_for_timeout(1200)
 
-        for _ in range(30):
+        for _ in range(36):
             control.checkpoint()
             if capturados:
                 break
             _clicar_play(pagina)
+            _colher_video(pagina, capturados)
             pagina.wait_for_timeout(700)
 
+        _colher_video(pagina, capturados)
         if not capturados:
             raise ResolveError("capture_sem_m3u8")
 
         ordenados = sorted(capturados, key=lambda par: (".m3u8" not in par[0].lower(),
                                                         ".mp4" not in par[0].lower()))
-        ultima: ResolveError | None = None
+        falha: ResolveError | None = None
         for master, headers in ordenados[:4]:
             cookie = _cookies_para(ctx, master)
             if cookie:
@@ -363,7 +436,7 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
             try:
                 _validar(cand)
             except ResolveError as exc:
-                ultima = exc
+                falha = exc
                 continue
             try:
                 manifest = _get(master, headers=cand["headers"]).text
@@ -377,7 +450,7 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
             except (ResolveError, requests.RequestException):
                 pass
             return [cand]
-        raise ultima or ResolveError("capture_invalido")
+        raise falha or ResolveError("capture_invalido")
     except ResolveError:
         raise
     except Exception as exc:
@@ -515,10 +588,18 @@ def _capture(src: dict, control, offset: int = 0) -> list[dict]:
     kind, tmdb = src["kind"], int(src["tmdb"])
     temporada = int(src.get("season") or 0)
     episodio = int(src.get("episode") or 0)
-    hosts = list(EMBEDS)
+    erros: list[str] = []
+
+    try:
+        return _vidlink_api(src, control)
+    except ResolveError as exc:
+        erros.append(f"vidlink_api:{exc.code}")
+    except (requests.RequestException, ValueError, KeyError) as exc:
+        erros.append(f"vidlink_api:{type(exc).__name__}")
+
+    hosts = [h for h in EMBEDS if h != "vidlink"]
     if offset:
         hosts = hosts[offset % len(hosts):] + hosts[:offset % len(hosts)]
-    erros: list[str] = []
     for host in hosts:
         control.checkpoint()
         if host == "vidsrc" and _info_ok(kind, tmdb, temporada, episodio) is False:
@@ -538,6 +619,7 @@ RESOLVEDORES: dict[str, Callable[[dict, object, int], list[dict]]] = {
     "ytdlp": _ytdlp,
     "vidsrc": _vidsrc,
     "capture": _capture,
+    "vidlink": _vidlink_api,
 }
 
 
@@ -839,6 +921,16 @@ def _imdb_id(tmdb: int, kind: str) -> str | None:
 # ------------------------------------------------------------------ cli
 
 def diagnostico(tmdb: int, kind: str, season: int = 1, episode: int = 1) -> int:
+    try:
+        r = requests.post(
+            (f"https://vidlink.pro/api/b/tv/{tmdb}/{season}/{episode}" if kind == "tv"
+             else f"https://vidlink.pro/api/b/movie/{tmdb}"),
+            headers={"User-Agent": UA, "Referer": "https://vidlink.pro/",
+                     "Origin": "https://vidlink.pro", "Content-Type": "application/json"},
+            json={}, timeout=TIMEOUT)
+        print(json.dumps({"vidlink_api": r.status_code, "corpo": r.text[:200]}))
+    except requests.RequestException as exc:
+        print(json.dumps({"vidlink_api": type(exc).__name__}))
     for host, montar in EMBEDS.items():
         embed = montar(kind, tmdb, season, episode)
         try:
