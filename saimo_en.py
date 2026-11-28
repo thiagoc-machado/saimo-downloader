@@ -37,8 +37,10 @@ OS_UA = "Saimo Downloader v1.0"
 
 INTERVALO_CAPTURA = float(os.getenv("SAIMO_EN_INTERVALO", "8"))
 TENTATIVAS_429 = max(1, min(5, int(os.getenv("SAIMO_EN_429_RETRIES", "3"))))
+TENTATIVAS_DOWNLOAD = max(1, min(4, int(os.getenv("SAIMO_EN_DL_RETRIES", "3"))))
 ESTADO_PW = Path(os.getenv("SAIMO_EN_STATE", "./data/pw_state.json")).expanduser()
 PROXY_PW = os.getenv("SAIMO_EN_PROXY", "").strip()
+RE_HOTLINK = (403, 427, 429)
 
 
 class ResolveError(Exception):
@@ -163,7 +165,7 @@ def _abrir(pagina, url: str):
             resposta = pagina.goto(url, wait_until="domcontentloaded", timeout=30000)
         except Exception as exc:
             texto = str(exc)
-            if "429" in texto:
+            if any(str(codigo) in texto for codigo in RE_HOTLINK):
                 if tentativa >= TENTATIVAS_429:
                     raise ResolveError("capture_http_429")
                 time.sleep(6 * tentativa)
@@ -171,7 +173,7 @@ def _abrir(pagina, url: str):
             if "imeout" in texto:
                 raise ResolveError("capture_timeout")
             raise ResolveError("capture_navegacao", texto[:80])
-        if resposta is not None and resposta.status == 429:
+        if resposta is not None and resposta.status in RE_HOTLINK:
             if tentativa >= TENTATIVAS_429:
                 raise ResolveError("capture_http_429")
             espera = 6 * tentativa
@@ -263,6 +265,7 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
         headers = {c.title(): v for c, v in requisicao.headers.items() if c.lower() in permitidos}
         headers.setdefault("Referer", origem + "/")
         headers.setdefault("Origin", origem)
+        headers.setdefault("Accept", "*/*")
         capturados.append((url, headers))
 
     _vaga_captura()
@@ -553,67 +556,91 @@ def _progresso(linha: str) -> tuple[int, int] | None:
     return baixado, total
 
 
-def baixar_ytdlp(cand: dict, output_base: str, progress, control) -> str | None:
-    """Baixa candidato EN, usando ffmpeg para unir fluxos separados e yt-dlp nos demais."""
-    alvo = Path(output_base)
-    alvo.parent.mkdir(parents=True, exist_ok=True)
+def _headers_download(cand: dict) -> dict:
     headers = cand.get("headers") if isinstance(cand.get("headers"), dict) else {}
-    audio_headers = cand.get("audio_headers") if isinstance(cand.get("audio_headers"), dict) else headers
-    if cand.get("audio_url"):
-        final = Path(str(alvo) + ".mp4")
-        temporary = Path(str(final) + ".part")
-        temporary.unlink(missing_ok=True)
-        cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-               "-rw_timeout", "25000000"]
-        if headers:
-            cmd += ["-headers", _format_headers(headers)]
-        cmd += ["-i", str(cand["url"]), "-rw_timeout", "25000000"]
-        if audio_headers:
-            cmd += ["-headers", _format_headers(audio_headers)]
-        cmd += ["-i", str(cand["audio_url"]), "-map", "0:v:0",
-                "-map", "1:a:0", "-c", "copy", "-movflags", "+faststart",
-                "-progress", "pipe:1", "-nostats", str(temporary)]
-        duration = float(cand.get("duration") or 0)
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                text=True, bufsize=1)
-        try:
-            for linha in proc.stdout or []:
-                linha = linha.strip()
-                if linha.startswith("out_time_ms=") and duration > 0:
-                    try:
-                        done = int(linha.split("=", 1)[1])
-                        total = int(duration * 1_000_000)
-                        progress(min(done, total), total, min(done, total), total)
-                    except ValueError:
-                        pass
-                try:
-                    control.checkpoint()
-                except Exception:
-                    proc.terminate()
-                    proc.wait()
-                    raise
-        finally:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-        if proc.returncode != 0:
-            return None
-        if temporary.is_file() and temporary.stat().st_size:
-            os.replace(temporary, final)
-            return str(final)
-        return None
+    cab = {k: v for k, v in headers.items() if v}
+    cab.setdefault("Accept", "*/*")
+    cab.setdefault("User-Agent", UA)
+    if cand.get("provider") in ("capture", "vidsrc", "vidlink") and "Referer" not in cab:
+        cab["Referer"] = str(cand.get("url", "")).split("/mp/")[0] + "/"
+    return cab
 
+
+def _baixar_ffmpeg(cand: dict, final: Path, temporary: Path, progress, control) -> bool:
+    cab = _headers_download(cand)
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+           "-rw_timeout", "25000000", "-headers", _format_headers(cab),
+           "-i", str(cand["url"])]
+    if cand.get("audio_url"):
+        cmd += ["-rw_timeout", "25000000",
+                "-headers", _format_headers(cand.get("audio_headers") or cab),
+                "-i", str(cand["audio_url"]), "-map", "0:v:0", "-map", "1:a:0"]
+    cmd += ["-c", "copy", "-movflags", "+faststart",
+            "-progress", "pipe:1", "-nostats", str(temporary)]
+    duration = float(cand.get("duration") or 0)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            text=True, bufsize=1)
+    try:
+        for linha in proc.stdout or []:
+            linha = linha.strip()
+            if linha.startswith("out_time_ms=") and duration > 0:
+                try:
+                    feito = int(linha.split("=", 1)[1])
+                    total = int(duration * 1_000_000)
+                    progress(min(feito, total), total, min(feito, total), total)
+                except ValueError:
+                    pass
+            try:
+                control.checkpoint()
+            except Exception:
+                proc.terminate()
+                proc.wait()
+                raise
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+    return proc.returncode == 0 and temporary.is_file() and temporary.stat().st_size > 0
+
+
+def _baixar_requests(cand: dict, temporary: Path, progress, control) -> bool:
+    cab = _headers_download(cand)
+    cab["Range"] = "bytes=0-"
+    try:
+        with requests.get(cand["url"], headers=cab, stream=True, timeout=TIMEOUT,
+                          allow_redirects=True) as resposta:
+            if resposta.status_code not in (200, 206):
+                return False
+            total = int(resposta.headers.get("content-length") or 0)
+            feito = 0
+            with temporary.open("wb") as arquivo:
+                for pedaco in resposta.iter_content(1 << 18):
+                    control.checkpoint()
+                    if not pedaco:
+                        continue
+                    arquivo.write(pedaco)
+                    feito += len(pedaco)
+                    progress(feito, total or feito, feito, total or feito)
+    except (requests.RequestException, OSError):
+        return False
+    return temporary.is_file() and temporary.stat().st_size > 0
+
+
+def _baixar_ytdlp(cand: dict, alvo: Path, progress, control) -> str | None:
+    cab = _headers_download(cand)
     cmd = [YTDLP, "-c", "--newline", "--no-warnings", "--no-playlist",
            "--progress-template", "download:D %(progress.downloaded_bytes)s "
            "%(progress.total_bytes)s %(progress.total_bytes_estimate)s",
            "-f", f"b[height<={cand.get('quality') or MAX_H}]/b",
            "-o", str(alvo) + ".%(ext)s"]
-    if headers.get("Referer"):
-        cmd += ["--referer", headers["Referer"]]
+    if cab.get("Referer"):
+        cmd += ["--referer", cab["Referer"]]
+    if cab.get("Origin"):
+        cmd += ["--add-header", f"Origin: {cab['Origin']}"]
     cmd.append(cand["url"])
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, bufsize=1)
@@ -642,6 +669,31 @@ def baixar_ytdlp(cand: dict, output_base: str, progress, control) -> str | None:
         if achado.is_file() and achado.stat().st_size:
             return str(achado)
     return None
+
+
+def baixar_ytdlp(cand: dict, output_base: str, progress, control) -> str | None:
+    """Baixa o candidato EN: ffmpeg com headers, requests em cascata e yt-dlp no fim."""
+    alvo = Path(output_base)
+    alvo.parent.mkdir(parents=True, exist_ok=True)
+    progressivo = bool(re.search(r"\.(mp4|m4v|webm|mkv|m4a)(\?|$)", str(cand.get("url", "")).lower()))
+    if cand.get("audio_url") or progressivo:
+        final = Path(str(alvo) + ".mp4")
+        temporary = Path(str(final) + ".part")
+        for tentativa in range(1, TENTATIVAS_DOWNLOAD + 1):
+            temporary.unlink(missing_ok=True)
+            if _baixar_ffmpeg(cand, final, temporary, progress, control):
+                os.replace(temporary, final)
+                return str(final)
+            temporary.unlink(missing_ok=True)
+            if _baixar_requests(cand, temporary, progress, control):
+                os.replace(temporary, final)
+                return str(final)
+            if tentativa < TENTATIVAS_DOWNLOAD:
+                time.sleep(3 * tentativa)
+        temporary.unlink(missing_ok=True)
+        if cand.get("audio_url"):
+            return None
+    return _baixar_ytdlp(cand, alvo, progress, control)
 
 
 def _format_headers(headers: dict) -> str:
@@ -795,4 +847,4 @@ def _cli() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(_cli())
+    raise SystemExit(main())
