@@ -2,11 +2,12 @@
 """Resolvedores EN para o saimo: yt-dlp, vidsrc, vidlink e captura HLS via Playwright.
 
 Retorna lista de candidatos {"url","headers","quality","provider","subs"}.
-Nunca abre browser quando há caminho por requests. Uso interno apenas.
+Baixa previamente quando SAIMO_EN_PREDOWNLOAD=1 e devolve caminho local.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,8 @@ YTDLP = os.getenv("SAIMO_YTDLP", "yt-dlp")
 MAX_PROVIDERS = max(1, min(3, int(os.getenv("SAIMO_EN_PROVIDERS", "3"))))
 MAX_CANDIDATOS = 8
 BLOCO = int(os.getenv("SAIMO_EN_BLOCO", str(8 << 20)))
+PREDOWNLOAD = os.getenv("SAIMO_EN_PREDOWNLOAD", "1").strip() != "0"
+CACHE_EN = Path(os.getenv("SAIMO_EN_CACHE", "./data/en_cache")).expanduser()
 OS_API_URL = "https://api.opensubtitles.com/api/v1"
 OS_API_KEY = (os.getenv("SAIMO_OPENSUBTITLES_API_KEY") or
               os.getenv("OPENSUBTITLES_API_KEY", "")).strip()
@@ -452,14 +455,16 @@ def _vidlink_pela_pagina(src: dict, control) -> list[dict]:
 
     _vaga_captura()
     ctx = None
+    motivo = "capture_browser"
     for _ in range(2):
         try:
             ctx = _abrir_contexto(_obter_browser())
             break
-        except Exception:
+        except Exception as exc:
+            motivo = f"capture_browser: {type(exc).__name__}"
             _reset_browser()
     if ctx is None:
-        raise ResolveError("capture_browser")
+        raise ResolveError(motivo.split(":")[0], motivo.split(":", 1)[-1].strip())
     try:
         pagina = ctx.new_page()
         pagina.route(re.compile(r"(googletagmanager|histats|doubleclick|analytics)"),
@@ -825,51 +830,6 @@ RESOLVEDORES: dict[str, Callable[..., list[dict]]] = {
 }
 
 
-def resolver_fontes(sources: Iterable[dict], control, provider_offset: int = 0) -> list[dict]:
-    saida: list[dict] = []
-    descritores = [src for src in sources or [] if isinstance(src, dict)]
-    if not descritores:
-        raise ResolveError("sem_fontes", "lista de fontes vazia ou inválida")
-    if provider_offset:
-        inicio = provider_offset % len(descritores)
-        descritores = descritores[inicio:] + descritores[:inicio]
-    tentadas = 0
-    ja_capturou = False
-    erros: list[str] = []
-    for src in descritores:
-        if tentadas >= MAX_PROVIDERS:
-            break
-        provider = src.get("provider", "")
-        if provider in ("vidsrc", "capture"):
-            if ja_capturou:
-                continue
-            ja_capturou = True
-        control.checkpoint()
-        tentadas += 1
-        fn = RESOLVEDORES.get(provider)
-        try:
-            if fn:
-                saida.extend(fn(src, control, provider_offset))
-            elif ".m3u8" in str(src.get("url", "")):
-                saida.append(_norm(src["url"], src.get("headers")))
-            else:
-                raise ResolveError("provider_desconhecido", str(provider or "sem provider"))
-        except (ResolveError, requests.RequestException, subprocess.SubprocessError,
-                OSError, ValueError, KeyError, TypeError) as exc:
-            erros.append(f"{provider or 'fonte'}: {str(exc)[:90]}")
-            continue
-        except (core.DownloadPaused, core.DownloadCancelled):
-            raise
-        except Exception as exc:
-            erros.append(f"{provider or 'fonte'}: {type(exc).__name__}")
-            continue
-        if len(saida) >= MAX_CANDIDATOS:
-            break
-    if not saida and erros:
-        raise ResolveError("sem_fontes", "; ".join(erros[-2:]))
-    return sorted(saida, key=lambda c: c.get("quality") or 0, reverse=True)
-
-
 # ------------------------------------------------------------------ downloader
 
 def _progresso(linha: str) -> tuple[int, int] | None:
@@ -931,6 +891,7 @@ def _baixar_navegador(cand: dict, temporary: Path, progress, control) -> bool:
     total = 0
     falhas = 0
     try:
+        time.sleep(2)
         with temporary.open("wb") as arquivo:
             while True:
                 control.checkpoint()
@@ -940,18 +901,18 @@ def _baixar_navegador(cand: dict, temporary: Path, progress, control) -> bool:
                                                fail_on_status_code=False)
                 except PwError:
                     falhas += 1
-                    if falhas >= 3:
-                        return inicio > 0 and temporary.stat().st_size > 0
+                    if falhas >= 4:
+                        return temporary.stat().st_size > 0
                     time.sleep(6 * falhas)
                     continue
-                if resposta.status == 429 or resposta.status == 403:
+                if resposta.status in (403, 429):
                     falhas += 1
                     if falhas >= 4:
-                        return inicio > 0 and temporary.stat().st_size > 0
+                        return temporary.stat().st_size > 0
                     time.sleep(_espera_429(resposta.headers.get("retry-after"), falhas))
                     continue
                 if resposta.status not in (200, 206):
-                    return inicio > 0 and temporary.stat().st_size > 0
+                    return temporary.stat().st_size > 0
                 pedaco = resposta.body()
                 if not pedaco:
                     break
@@ -965,7 +926,7 @@ def _baixar_navegador(cand: dict, temporary: Path, progress, control) -> bool:
                 if len(pedaco) < BLOCO:
                     break
     except Exception:
-        return inicio > 0 and temporary.stat().st_size > 0
+        return temporary.is_file() and temporary.stat().st_size > 0
     finally:
         try:
             ctx.close()
@@ -1127,6 +1088,87 @@ def _format_headers(headers: dict) -> str:
                    for key, value in headers.items() if value is not None)
 
 
+# ------------------------------------------------------------------ predownload
+
+def _limpar_cache(dias: int = 2) -> None:
+    limite = time.time() - dias * 86400
+    try:
+        for arquivo in CACHE_EN.iterdir():
+            if arquivo.is_file() and arquivo.stat().st_mtime < limite:
+                arquivo.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _predownload(cands: list[dict], control, progress=None) -> list[dict]:
+    """Baixa o primeiro candidato que funcionar e devolve caminho local."""
+    if not PREDOWNLOAD or not cands:
+        return cands
+    if cands[0].get("url", "").startswith("/"):
+        return cands
+    CACHE_EN.mkdir(parents=True, exist_ok=True)
+    _limpar_cache()
+    vazio = progress or (lambda *a: None)
+    for cand in cands[:3]:
+        destino = CACHE_EN / hashlib.sha1(cand["url"].encode()).hexdigest()[:20]
+        arquivo = baixar_ytdlp(cand, str(destino), vazio, control)
+        if arquivo:
+            local = dict(cand)
+            local["origem"] = cand["url"]
+            local["url"] = str(Path(arquivo).resolve())
+            local["headers"] = {}
+            local["local"] = local["url"]
+            resto = [c for c in cands if c is not cand]
+            return [local] + resto
+    return cands
+
+
+def resolver_fontes(sources: Iterable[dict], control, provider_offset: int = 0) -> list[dict]:
+    saida: list[dict] = []
+    descritores = [src for src in sources or [] if isinstance(src, dict)]
+    if not descritores:
+        raise ResolveError("sem_fontes", "lista de fontes vazia ou inválida")
+    if provider_offset:
+        inicio = provider_offset % len(descritores)
+        descritores = descritores[inicio:] + descritores[:inicio]
+    tentadas = 0
+    ja_capturou = False
+    erros: list[str] = []
+    for src in descritores:
+        if tentadas >= MAX_PROVIDERS:
+            break
+        provider = src.get("provider", "")
+        if provider in ("vidsrc", "capture"):
+            if ja_capturou:
+                continue
+            ja_capturou = True
+        control.checkpoint()
+        tentadas += 1
+        fn = RESOLVEDORES.get(provider)
+        try:
+            if fn:
+                saida.extend(fn(src, control, provider_offset))
+            elif ".m3u8" in str(src.get("url", "")):
+                saida.append(_norm(src["url"], src.get("headers")))
+            else:
+                raise ResolveError("provider_desconhecido", str(provider or "sem provider"))
+        except (ResolveError, requests.RequestException, subprocess.SubprocessError,
+                OSError, ValueError, KeyError, TypeError) as exc:
+            erros.append(f"{provider or 'fonte'}: {str(exc)[:90]}")
+            continue
+        except (core.DownloadPaused, core.DownloadCancelled):
+            raise
+        except Exception as exc:
+            erros.append(f"{provider or 'fonte'}: {type(exc).__name__}")
+            continue
+        if len(saida) >= MAX_CANDIDATOS:
+            break
+    if not saida:
+        raise ResolveError("sem_fontes", "; ".join(erros[-2:]) or "nenhuma fonte")
+    saida = sorted(saida, key=lambda c: c.get("quality") or 0, reverse=True)
+    return _predownload(saida, control)
+
+
 # ------------------------------------------------------------------ legendas
 
 def buscar_legenda(tmdb: int, kind: str, season: int = 0, episode: int = 0) -> str | None:
@@ -1226,18 +1268,6 @@ def diagnostico(tmdb: int, kind: str, season: int = 1, episode: int = 1) -> int:
         print(json.dumps({"vidsrc_info": r.status_code, "corpo": r.text[:400]}))
     except requests.RequestException as exc:
         print(json.dumps({"vidsrc_info": type(exc).__name__}))
-    for host, montar in EMBEDS.items():
-        embed = montar(kind, tmdb, season, episode)
-        try:
-            r = requests.get(embed, headers={"User-Agent": UA}, timeout=TIMEOUT,
-                             allow_redirects=True)
-        except requests.RequestException as exc:
-            print(json.dumps({"host": host, "erro": type(exc).__name__}))
-            continue
-        print(json.dumps({"host": host, "final": r.url, "status": r.status_code,
-                          "data_id": bool(re.search(r'data-id="', r.text)),
-                          "midias": _midias_html(r.text)[:3],
-                          "bytes": len(r.text)}))
     return 0
 
 
@@ -1270,15 +1300,15 @@ def _cli() -> int:
         print(f"falhou: {exc}", file=sys.stderr)
         return 1
     for c in cands:
-        print(json.dumps({k: c[k] for k in ("provider", "quality", "url")}, ensure_ascii=False))
+        print(json.dumps({k: c.get(k) for k in ("provider", "quality", "url")},
+                         ensure_ascii=False))
     if args.acao == "baixar" and cands:
         def prog(d, t, *_):
             print(f"\r{d * 100 / t:5.1f}%", end="", flush=True)
         print()
         for cand in cands:
-            saida = baixar_ytdlp(cand, args.out, prog, Controle())
-            if saida:
-                print(saida)
+            if cand.get("local"):
+                print(cand["local"])
                 return 0
         print("falhou")
         return 1
