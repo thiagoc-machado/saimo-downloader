@@ -37,11 +37,12 @@ OS_UA = "Saimo Downloader v1.0"
 
 INTERVALO_CAPTURA = float(os.getenv("SAIMO_EN_INTERVALO", "8"))
 TENTATIVAS_429 = max(1, min(5, int(os.getenv("SAIMO_EN_429_RETRIES", "3"))))
-TENTATIVAS_DOWNLOAD = max(1, min(4, int(os.getenv("SAIMO_EN_DL_RETRIES", "3"))))
+TENTATIVAS_DOWNLOAD = max(1, min(4, int(os.getenv("SAIMO_EN_DL_RETRIES", "4"))))
 ESTADO_PW = Path(os.getenv("SAIMO_EN_STATE", "./data/pw_state.json")).expanduser()
 PROXY_PW = os.getenv("SAIMO_EN_PROXY", "").strip()
 RE_HOTLINK = (403, 427, 428, 429)
 RE_MIDIA = re.compile(r'https?://[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*')
+RE_SHARD = re.compile(r"^(bcdn)(\d+)\.(.+)$")
 IGNORAR_HEADERS = {"host", "content-length", "range", "connection", "accept-encoding",
                    "if-none-match", "if-modified-since", "if-range", "te"}
 
@@ -108,6 +109,28 @@ def _fluxo(dados: dict) -> dict:
             atual = atual[chave]
             break
     return atual
+
+
+def _variantes_cdn(url: str) -> list[str]:
+    partes = urlparse(url)
+    encontrado = RE_SHARD.match(partes.hostname or "")
+    if not encontrado:
+        return [url]
+    saida = [url]
+    for numero in range(1, 5):
+        if str(numero) == encontrado.group(2):
+            continue
+        novo = f"{encontrado.group(1)}{numero}.{encontrado.group(3)}"
+        saida.append(partes._replace(netloc=novo).geturl())
+    return saida
+
+
+def _expandir(cand: dict) -> list[dict]:
+    saida = [cand]
+    for variante in _variantes_cdn(cand["url"])[1:]:
+        saida.append(_norm(variante, dict(cand["headers"]), cand.get("quality"),
+                           cand.get("provider", "")))
+    return saida
 
 
 def _rc4(chave: list[int], dados: str) -> str:
@@ -342,6 +365,13 @@ def _validar(cand: dict) -> bool:
         resposta.close()
 
 
+def _cabecalho_midia(referer: str) -> dict:
+    return {"Referer": referer, "Origin": "https://vidlink.pro", "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9", "User-Agent": UA,
+            "Sec-Fetch-Dest": "video", "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Site": "cross-site"}
+
+
 # ------------------------------------------------------------------ vidlink
 
 def _vidlink_urls(kind: str, tmdb: int, temporada: int, episodio: int) -> list[str]:
@@ -398,13 +428,12 @@ def _vidlink_api(src: dict, control, offset: int = 0) -> list[dict]:
     playlist = fluxo.get("playlist") or fluxo.get("source") or fluxo.get("url")
     if not playlist:
         raise ResolveError("vidlink_sem_fonte", str(list(fluxo)[:6]))
-    headers = {k: v for k, v in cab.items() if k != "Accept"}
-    headers.update({"Accept": "*/*", "Sec-Fetch-Dest": "video",
-                    "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Site": "cross-site"})
-    cand = _norm(str(playlist), headers, 1080, "vidlink")
+    referer = f"https://vidlink.pro/{'tv' if kind == 'tv' else 'movie'}/{tmdb}"
+    if kind == "tv":
+        referer += f"/{temporada}/{episodio}"
+    cand = _norm(str(playlist), _cabecalho_midia(referer), 1080, "vidlink")
     cand["subs"] = _legendas_de(fluxo, str(playlist))
-    _validar(cand)
-    return [cand]
+    return _expandir(cand)
 
 
 def _vidlink_pela_pagina(src: dict, control) -> list[dict]:
@@ -453,25 +482,19 @@ def _vidlink_pela_pagina(src: dict, control) -> list[dict]:
             urls = _midias_html(html)
             if not urls:
                 raise ResolveError("vidlink_pagina_vazia")
-            cab = {"Referer": pagina_url, "Accept": "*/*", "User-Agent": UA}
-            cand = _norm(urls[0], cab, 1080, "vidlink")
-            _validar(cand)
-            return [cand]
+            return _expandir(_norm(urls[0], _cabecalho_midia(pagina_url), 1080, "vidlink"))
 
         fluxo = _fluxo(dados)
         playlist = fluxo.get("playlist") or fluxo.get("source") or fluxo.get("url")
         if not playlist:
             raise ResolveError("vidlink_sem_fonte", str(list(fluxo)[:6]))
+        cab = _cabecalho_midia(pagina_url)
         cookie = _cookies_para(ctx, str(playlist))
-        cab = {"Referer": pagina_url, "Origin": "https://vidlink.pro", "Accept": "*/*",
-               "User-Agent": UA, "Sec-Fetch-Dest": "video",
-               "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Site": "cross-site"}
         if cookie:
             cab["Cookie"] = cookie
         cand = _norm(str(playlist), cab, 1080, "vidlink")
         cand["subs"] = _legendas_de(fluxo, str(playlist))
-        _validar(cand)
-        return [cand]
+        return _expandir(cand)
     finally:
         try:
             ctx.close()
@@ -586,7 +609,7 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
                              "url": urljoin(escolhido["url"], uri.group(1))})
         except (ResolveError, requests.RequestException):
             pass
-        return [escolhido]
+        return _expandir(escolhido)
     except ResolveError:
         raise
     except Exception as exc:
@@ -755,10 +778,10 @@ def _capture(src: dict, control, offset: int = 0) -> list[dict]:
     episodio = int(src.get("episode") or 0)
     erros: list[str] = []
 
-    for nome, funcao in (("vidlink_api", _vidlink_api),
-                         ("vidlink_pagina", _vidlink_pela_pagina)):
+    for nome, funcao, com_offset in (("vidlink_api", _vidlink_api, True),
+                                     ("vidlink_pagina", _vidlink_pela_pagina, False)):
         try:
-            return funcao(src, control, offset) if nome == "vidlink_api" else funcao(src, control)
+            return funcao(src, control, offset) if com_offset else funcao(src, control)
         except ResolveError as exc:
             erros.append(f"{nome}:{exc.code}")
         except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
@@ -864,10 +887,22 @@ def _headers_download(cand: dict) -> dict:
     return cab
 
 
+def _espera_429(resposta, tentativa: int) -> float:
+    espera = 8.0 * tentativa
+    try:
+        cabecalho = resposta.headers.get("retry-after")
+        if cabecalho:
+            espera = max(espera, min(90.0, float(cabecalho)))
+    except (ValueError, AttributeError):
+        pass
+    return espera
+
+
 def _baixar_ffmpeg(cand: dict, final: Path, temporary: Path, progress, control) -> bool:
     cab = _headers_download(cand)
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-           "-rw_timeout", "25000000", "-headers", _format_headers(cab),
+           "-rw_timeout", "25000000", "-reconnect", "1", "-reconnect_streamed", "1",
+           "-reconnect_delay_max", "8", "-headers", _format_headers(cab),
            "-i", str(cand["url"])]
     if cand.get("audio_url"):
         cmd += ["-rw_timeout", "25000000",
@@ -908,29 +943,39 @@ def _baixar_ffmpeg(cand: dict, final: Path, temporary: Path, progress, control) 
 def _baixar_requests(cand: dict, temporary: Path, progress, control) -> bool:
     cab = _headers_download(cand)
     cab["Range"] = "bytes=0-"
-    try:
-        with requests.get(cand["url"], headers=cab, stream=True, timeout=TIMEOUT,
-                          allow_redirects=True) as resposta:
-            if resposta.status_code not in (200, 206):
-                return False
-            total = int(resposta.headers.get("content-length") or 0)
-            feito = 0
-            with temporary.open("wb") as arquivo:
-                for pedaco in resposta.iter_content(1 << 18):
-                    control.checkpoint()
-                    if not pedaco:
+    for tentativa in range(1, 4):
+        try:
+            with requests.get(cand["url"], headers=cab, stream=True, timeout=TIMEOUT,
+                              allow_redirects=True) as resposta:
+                if resposta.status_code == 429:
+                    if tentativa < 3:
+                        time.sleep(_espera_429(resposta, tentativa))
                         continue
-                    arquivo.write(pedaco)
-                    feito += len(pedaco)
-                    progress(feito, total or feito, feito, total or feito)
-    except (requests.RequestException, OSError):
-        return False
-    return temporary.is_file() and temporary.stat().st_size > 0
+                    return False
+                if resposta.status_code not in (200, 206):
+                    return False
+                total = int(resposta.headers.get("content-length") or 0)
+                feito = 0
+                with temporary.open("wb") as arquivo:
+                    for pedaco in resposta.iter_content(1 << 18):
+                        control.checkpoint()
+                        if not pedaco:
+                            continue
+                        arquivo.write(pedaco)
+                        feito += len(pedaco)
+                        progress(feito, total or feito, feito, total or feito)
+                return temporary.is_file() and temporary.stat().st_size > 0
+        except (requests.RequestException, OSError):
+            if tentativa >= 3:
+                return False
+            time.sleep(4 * tentativa)
+    return False
 
 
 def _baixar_ytdlp(cand: dict, alvo: Path, progress, control) -> str | None:
     cab = _headers_download(cand)
     cmd = [YTDLP, "-c", "--newline", "--no-warnings", "--no-playlist",
+           "--socket-timeout", "20", "--retries", "3", "--fragment-retries", "3",
            "--progress-template", "download:D %(progress.downloaded_bytes)s "
            "%(progress.total_bytes)s %(progress.total_bytes_estimate)s",
            "-f", f"b[height<={cand.get('quality') or MAX_H}]/b",
@@ -990,7 +1035,7 @@ def baixar_ytdlp(cand: dict, output_base: str, progress, control) -> str | None:
                 os.replace(temporary, final)
                 return str(final)
             if tentativa < TENTATIVAS_DOWNLOAD:
-                time.sleep(3 * tentativa)
+                time.sleep(8 * tentativa)
         temporary.unlink(missing_ok=True)
         if cand.get("audio_url"):
             return None
@@ -1150,7 +1195,13 @@ def _cli() -> int:
         def prog(d, t, *_):
             print(f"\r{d * 100 / t:5.1f}%", end="", flush=True)
         print()
-        print(baixar_ytdlp(cands[0], args.out, prog, Controle()) or "falhou")
+        for cand in cands:
+            saida = baixar_ytdlp(cand, args.out, prog, Controle())
+            if saida:
+                print(saida)
+                return 0
+        print("falhou")
+        return 1
     return 0 if cands else 1
 
 
