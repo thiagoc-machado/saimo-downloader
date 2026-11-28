@@ -18,7 +18,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from typing import Callable, Iterable
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 
 import requests
 import saimo_core as core
@@ -40,7 +40,9 @@ TENTATIVAS_429 = max(1, min(5, int(os.getenv("SAIMO_EN_429_RETRIES", "3"))))
 TENTATIVAS_DOWNLOAD = max(1, min(4, int(os.getenv("SAIMO_EN_DL_RETRIES", "3"))))
 ESTADO_PW = Path(os.getenv("SAIMO_EN_STATE", "./data/pw_state.json")).expanduser()
 PROXY_PW = os.getenv("SAIMO_EN_PROXY", "").strip()
-RE_HOTLINK = (403, 427, 429)
+RE_HOTLINK = (403, 427, 428, 429)
+IGNORAR_HEADERS = {"host", "content-length", "range", "connection", "accept-encoding",
+                   "if-none-match", "if-modified-since", "if-range", "te"}
 
 
 class ResolveError(Exception):
@@ -250,6 +252,37 @@ def _desafio(pagina) -> bool:
     return "429" in corpo or "too many requests" in corpo or "verifying" in corpo
 
 
+def _cookies_para(ctx, url: str) -> str:
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return ""
+    jar = []
+    try:
+        for cookie in ctx.cookies():
+            dominio = str(cookie.get("domain") or "").lstrip(".").lower()
+            if dominio and (host == dominio or host.endswith("." + dominio)):
+                jar.append(f"{cookie['name']}={cookie['value']}")
+    except Exception:
+        return ""
+    return "; ".join(jar)
+
+
+def _validar(cand: dict) -> None:
+    headers = dict(cand.get("headers") or {})
+    headers["Range"] = "bytes=0-0"
+    try:
+        resposta = requests.get(cand["url"], headers=headers, stream=True,
+                                timeout=TIMEOUT, allow_redirects=True)
+    except requests.RequestException as exc:
+        raise ResolveError("capture_validacao", type(exc).__name__)
+    try:
+        if resposta.status_code not in (200, 206):
+            raise ResolveError(f"capture_http_{resposta.status_code}")
+        next(resposta.iter_content(1), None)
+    finally:
+        resposta.close()
+
+
 def _captura_host(embed: str, origem: str, control) -> list[dict]:
     capturados: list[tuple[str, dict]] = []
 
@@ -260,12 +293,14 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
             return
         if any(url == existente[0] for existente in capturados):
             return
-        permitidos = {"user-agent", "referer", "origin", "cookie", "authorization",
-                      "accept", "accept-language"}
-        headers = {c.title(): v for c, v in requisicao.headers.items() if c.lower() in permitidos}
+        headers = {c.title(): v for c, v in requisicao.headers.items()
+                   if c.lower() not in IGNORAR_HEADERS}
         headers.setdefault("Referer", origem + "/")
         headers.setdefault("Origin", origem)
         headers.setdefault("Accept", "*/*")
+        headers.setdefault("Sec-Fetch-Dest", "video")
+        headers.setdefault("Sec-Fetch-Mode", "no-cors")
+        headers.setdefault("Sec-Fetch-Site", "cross-site")
         capturados.append((url, headers))
 
     _vaga_captura()
@@ -313,6 +348,36 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
                 break
             _clicar_play(pagina)
             pagina.wait_for_timeout(700)
+
+        if not capturados:
+            raise ResolveError("capture_sem_m3u8")
+
+        ordenados = sorted(capturados, key=lambda par: (".m3u8" not in par[0].lower(),
+                                                        ".mp4" not in par[0].lower()))
+        ultima: ResolveError | None = None
+        for master, headers in ordenados[:4]:
+            cookie = _cookies_para(ctx, master)
+            if cookie:
+                headers["Cookie"] = cookie
+            cand = _norm(master, headers, None, "capture")
+            try:
+                _validar(cand)
+            except ResolveError as exc:
+                ultima = exc
+                continue
+            try:
+                manifest = _get(master, headers=cand["headers"]).text
+                for linha in manifest.splitlines():
+                    if "TYPE=SUBTITLES" in linha:
+                        nome = re.search(r'NAME="([^"]*)"', linha)
+                        uri = re.search(r'URI="([^"]+)"', linha)
+                        if uri:
+                            cand["subs"].append({"lang": nome.group(1) if nome else "?",
+                                                 "url": urljoin(master, uri.group(1))})
+            except (ResolveError, requests.RequestException):
+                pass
+            return [cand]
+        raise ultima or ResolveError("capture_invalido")
     except ResolveError:
         raise
     except Exception as exc:
@@ -328,24 +393,6 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
             ctx.close()
         except Exception:
             pass
-
-    if not capturados:
-        raise ResolveError("capture_sem_m3u8")
-    master, headers = next(((u, h) for u, h in capturados if ".m3u8" in u.lower()),
-                           capturados[0])
-    cand = _norm(master, headers, None, "capture")
-    try:
-        manifest = _get(master, headers=cand["headers"]).text
-        for linha in manifest.splitlines():
-            if "TYPE=SUBTITLES" in linha:
-                nome = re.search(r'NAME="([^"]*)"', linha)
-                uri = re.search(r'URI="([^"]+)"', linha)
-                if uri:
-                    cand["subs"].append({"lang": nome.group(1) if nome else "?",
-                                         "url": urljoin(master, uri.group(1))})
-    except (ResolveError, requests.RequestException):
-        pass
-    return [cand]
 
 
 # ------------------------------------------------------------------ resolvedores
@@ -561,8 +608,10 @@ def _headers_download(cand: dict) -> dict:
     cab = {k: v for k, v in headers.items() if v}
     cab.setdefault("Accept", "*/*")
     cab.setdefault("User-Agent", UA)
-    if cand.get("provider") in ("capture", "vidsrc", "vidlink") and "Referer" not in cab:
-        cab["Referer"] = str(cand.get("url", "")).split("/mp/")[0] + "/"
+    if "Referer" not in cab:
+        partes = urlparse(str(cand.get("url", "")))
+        cab["Referer"] = f"{partes.scheme}://{partes.netloc}/"
+    cab.setdefault("Origin", cab["Referer"].rstrip("/"))
     return cab
 
 
@@ -641,6 +690,8 @@ def _baixar_ytdlp(cand: dict, alvo: Path, progress, control) -> str | None:
         cmd += ["--referer", cab["Referer"]]
     if cab.get("Origin"):
         cmd += ["--add-header", f"Origin: {cab['Origin']}"]
+    if cab.get("Cookie"):
+        cmd += ["--add-header", f"Cookie: {cab['Cookie']}"]
     cmd.append(cand["url"])
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, bufsize=1)
@@ -675,7 +726,8 @@ def baixar_ytdlp(cand: dict, output_base: str, progress, control) -> str | None:
     """Baixa o candidato EN: ffmpeg com headers, requests em cascata e yt-dlp no fim."""
     alvo = Path(output_base)
     alvo.parent.mkdir(parents=True, exist_ok=True)
-    progressivo = bool(re.search(r"\.(mp4|m4v|webm|mkv|m4a)(\?|$)", str(cand.get("url", "")).lower()))
+    progressivo = bool(re.search(r"\.(mp4|m4v|webm|mkv|m4a)(\?|$)",
+                                 str(cand.get("url", "")).lower()))
     if cand.get("audio_url") or progressivo:
         final = Path(str(alvo) + ".mp4")
         temporary = Path(str(final) + ".part")
@@ -847,4 +899,4 @@ def _cli() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_cli())
