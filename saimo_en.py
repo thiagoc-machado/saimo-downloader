@@ -294,55 +294,86 @@ def _cookies_para(ctx, url: str) -> str:
     return "; ".join(jar)
 
 
-def _validar(cand: dict) -> None:
+def _validar(cand: dict) -> bool:
+    """Testa a URL com 1 byte. Nunca levanta: devolve True só em 200/206."""
     headers = dict(cand.get("headers") or {})
     headers["Range"] = "bytes=0-0"
     try:
         resposta = requests.get(cand["url"], headers=headers, stream=True,
                                 timeout=TIMEOUT, allow_redirects=True)
-    except requests.RequestException as exc:
-        raise ResolveError("capture_validacao", type(exc).__name__)
+    except requests.RequestException:
+        return False
     try:
         if resposta.status_code not in (200, 206):
-            raise ResolveError(f"capture_http_{resposta.status_code}")
+            return False
         next(resposta.iter_content(1), None)
+        return True
+    except (requests.RequestException, StopIteration):
+        return False
     finally:
         resposta.close()
 
 
 # ------------------------------------------------------------------ vidlink api
 
-def _vidlink_api(src: dict, control) -> list[dict]:
+def _vidlink_urls(kind: str, tmdb: int, temporada: int, episodio: int) -> list[str]:
+    if kind == "tv":
+        base = f"https://vidlink.pro/api/b/tv/{tmdb}/{temporada}/{episodio}"
+        return [base, base + "?multiLang=0"]
+    base = f"https://vidlink.pro/api/b/movie/{tmdb}"
+    return [base, base + "?multiLang=0"]
+
+
+def _vidlink_api(src: dict, control, offset: int = 0) -> list[dict]:
     kind, tmdb = src["kind"], int(src["tmdb"])
     temporada = int(src.get("season") or 1)
     episodio = int(src.get("episode") or 1)
-    if kind == "tv":
-        url = f"https://vidlink.pro/api/b/tv/{tmdb}/{temporada}/{episodio}"
-    else:
-        url = f"https://vidlink.pro/api/b/movie/{tmdb}"
-    cab = {"User-Agent": UA, "Accept": "*/*", "Referer": "https://vidlink.pro/",
+    cab = {"User-Agent": UA, "Accept": "application/json, text/plain, */*",
+           "Referer": f"https://vidlink.pro/{'tv' if kind == 'tv' else 'movie'}/"
+                      f"{tmdb}" + (f"/{temporada}/{episodio}" if kind == "tv" else ""),
            "Origin": "https://vidlink.pro"}
     dados = None
     ultimo = "vidlink_api"
-    for tentativa in range(2):
-        control.checkpoint()
-        try:
-            r = requests.post(url, headers={**cab, "Content-Type": "application/json"},
-                              json={}, timeout=TIMEOUT)
-            if r.status_code == 200:
-                dados = r.json()
-                break
-            ultimo = f"http_{r.status_code}"
-        except (requests.RequestException, ValueError) as exc:
-            ultimo = type(exc).__name__
-        time.sleep(1.2)
-    if not isinstance(dados, dict):
+    for url in _vidlink_urls(kind, tmdb, temporada, episodio):
+        for metodo in ("GET", "POST"):
+            control.checkpoint()
+            try:
+                if metodo == "GET":
+                    r = requests.get(url, headers=cab, timeout=TIMEOUT)
+                else:
+                    r = requests.post(url, headers={**cab, "Content-Type": "application/json"},
+                                      json={}, timeout=TIMEOUT)
+                if r.status_code == 200:
+                    corpo = r.json()
+                    if isinstance(corpo, dict):
+                        dados = corpo
+                        break
+                    ultimo = "json_invalido"
+                else:
+                    ultimo = f"http_{r.status_code}"
+            except (requests.RequestException, ValueError) as exc:
+                ultimo = type(exc).__name__
+            time.sleep(0.8)
+        if dados:
+            break
+    if not dados:
         raise ResolveError("vidlink_api", str(ultimo))
-    fluxo = dados.get("stream") if isinstance(dados.get("stream"), dict) else dados
-    playlist = fluxo.get("playlist") or fluxo.get("source") or dados.get("playlist")
+
+    fluxo = dados
+    for chave in ("stream", "data", "result"):
+        if isinstance(fluxo.get(chave), dict):
+            fluxo = fluxo[chave]
+            break
+    playlist = fluxo.get("playlist") or fluxo.get("source") or fluxo.get("url")
     if not playlist:
-        raise ResolveError("vidlink_sem_fonte")
-    cand = _norm(str(playlist), dict(cab), 1080, "vidlink")
+        raise ResolveError("vidlink_sem_fonte", str(list(fluxo)[:6]))
+
+    headers = {k: v for k, v in cab.items() if k not in ("Accept", "Content-Type")}
+    headers["Accept"] = "*/*"
+    headers["Sec-Fetch-Dest"] = "video"
+    headers["Sec-Fetch-Mode"] = "no-cors"
+    headers["Sec-Fetch-Site"] = "cross-site"
+    cand = _norm(str(playlist), headers, 1080, "vidlink")
     for legenda in fluxo.get("captions") or []:
         if not isinstance(legenda, dict):
             continue
@@ -427,30 +458,32 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
 
         ordenados = sorted(capturados, key=lambda par: (".m3u8" not in par[0].lower(),
                                                         ".mp4" not in par[0].lower()))
-        falha: ResolveError | None = None
+        escolhido: dict | None = None
         for master, headers in ordenados[:4]:
             cookie = _cookies_para(ctx, master)
             if cookie:
                 headers["Cookie"] = cookie
             cand = _norm(master, headers, None, "capture")
-            try:
-                _validar(cand)
-            except ResolveError as exc:
-                falha = exc
-                continue
-            try:
-                manifest = _get(master, headers=cand["headers"]).text
-                for linha in manifest.splitlines():
-                    if "TYPE=SUBTITLES" in linha:
-                        nome = re.search(r'NAME="([^"]*)"', linha)
-                        uri = re.search(r'URI="([^"]+)"', linha)
-                        if uri:
-                            cand["subs"].append({"lang": nome.group(1) if nome else "?",
-                                                 "url": urljoin(master, uri.group(1))})
-            except (ResolveError, requests.RequestException):
-                pass
-            return [cand]
-        raise falha or ResolveError("capture_invalido")
+            if _validar(cand):
+                escolhido = cand
+                break
+            if escolhido is None:
+                escolhido = cand
+        if escolhido is None:
+            raise ResolveError("capture_invalido")
+        try:
+            manifest = _get(escolhido["url"], headers=escolhido["headers"]).text
+            for linha in manifest.splitlines():
+                if "TYPE=SUBTITLES" in linha:
+                    nome = re.search(r'NAME="([^"]*)"', linha)
+                    uri = re.search(r'URI="([^"]+)"', linha)
+                    if uri:
+                        escolhido["subs"].append(
+                            {"lang": nome.group(1) if nome else "?",
+                             "url": urljoin(escolhido["url"], uri.group(1))})
+        except (ResolveError, requests.RequestException):
+            pass
+        return [escolhido]
     except ResolveError:
         raise
     except Exception as exc:
@@ -591,10 +624,10 @@ def _capture(src: dict, control, offset: int = 0) -> list[dict]:
     erros: list[str] = []
 
     try:
-        return _vidlink_api(src, control)
+        return _vidlink_api(src, control, offset)
     except ResolveError as exc:
         erros.append(f"vidlink_api:{exc.code}")
-    except (requests.RequestException, ValueError, KeyError) as exc:
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
         erros.append(f"vidlink_api:{type(exc).__name__}")
 
     hosts = [h for h in EMBEDS if h != "vidlink"]
@@ -653,7 +686,7 @@ def resolver_fontes(sources: Iterable[dict], control, provider_offset: int = 0) 
             else:
                 raise ResolveError("provider_desconhecido", str(provider or "sem provider"))
         except (ResolveError, requests.RequestException, subprocess.SubprocessError,
-                OSError, ValueError, KeyError) as exc:
+                OSError, ValueError, KeyError, TypeError) as exc:
             erros.append(f"{provider or 'fonte'}: {str(exc)[:90]}")
             continue
         except (core.DownloadPaused, core.DownloadCancelled):
@@ -921,16 +954,23 @@ def _imdb_id(tmdb: int, kind: str) -> str | None:
 # ------------------------------------------------------------------ cli
 
 def diagnostico(tmdb: int, kind: str, season: int = 1, episode: int = 1) -> int:
-    try:
-        r = requests.post(
-            (f"https://vidlink.pro/api/b/tv/{tmdb}/{season}/{episode}" if kind == "tv"
-             else f"https://vidlink.pro/api/b/movie/{tmdb}"),
-            headers={"User-Agent": UA, "Referer": "https://vidlink.pro/",
-                     "Origin": "https://vidlink.pro", "Content-Type": "application/json"},
-            json={}, timeout=TIMEOUT)
-        print(json.dumps({"vidlink_api": r.status_code, "corpo": r.text[:200]}))
-    except requests.RequestException as exc:
-        print(json.dumps({"vidlink_api": type(exc).__name__}))
+    for url in _vidlink_urls(kind, tmdb, season, episode):
+        for metodo in ("GET", "POST"):
+            try:
+                if metodo == "GET":
+                    r = requests.get(url, headers={"User-Agent": UA,
+                                                   "Referer": "https://vidlink.pro/"},
+                                     timeout=TIMEOUT)
+                else:
+                    r = requests.post(url, headers={"User-Agent": UA,
+                                                    "Referer": "https://vidlink.pro/",
+                                                    "Content-Type": "application/json"},
+                                      json={}, timeout=TIMEOUT)
+                print(json.dumps({"url": url, "metodo": metodo, "status": r.status_code,
+                                  "corpo": r.text[:160]}))
+            except requests.RequestException as exc:
+                print(json.dumps({"url": url, "metodo": metodo,
+                                  "erro": type(exc).__name__}))
     for host, montar in EMBEDS.items():
         embed = montar(kind, tmdb, season, episode)
         try:
