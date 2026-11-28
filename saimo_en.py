@@ -30,6 +30,7 @@ MAX_H = int(os.getenv("SAIMO_EN_MAX_H", "1080"))
 YTDLP = os.getenv("SAIMO_YTDLP", "yt-dlp")
 MAX_PROVIDERS = max(1, min(3, int(os.getenv("SAIMO_EN_PROVIDERS", "3"))))
 MAX_CANDIDATOS = 8
+BLOCO = int(os.getenv("SAIMO_EN_BLOCO", str(8 << 20)))
 OS_API_URL = "https://api.opensubtitles.com/api/v1"
 OS_API_KEY = (os.getenv("SAIMO_OPENSUBTITLES_API_KEY") or
               os.getenv("OPENSUBTITLES_API_KEY", "")).strip()
@@ -42,7 +43,9 @@ ESTADO_PW = Path(os.getenv("SAIMO_EN_STATE", "./data/pw_state.json")).expanduser
 PROXY_PW = os.getenv("SAIMO_EN_PROXY", "").strip()
 RE_HOTLINK = (403, 427, 428, 429)
 RE_MIDIA = re.compile(r'https?://[^\s"\'<>\\]+?\.(?:m3u8|mp4)[^\s"\'<>\\]*')
+RE_ROTA_MIDIA = re.compile(r"\.(?:mp4|m3u8)(?:\?|$)")
 RE_SHARD = re.compile(r"^(bcdn)(\d+)\.(.+)$")
+RE_FAIXA = re.compile(r"/(\d+)$")
 IGNORAR_HEADERS = {"host", "content-length", "range", "connection", "accept-encoding",
                    "if-none-match", "if-modified-since", "if-range", "te"}
 
@@ -461,6 +464,7 @@ def _vidlink_pela_pagina(src: dict, control) -> list[dict]:
         pagina = ctx.new_page()
         pagina.route(re.compile(r"(googletagmanager|histats|doubleclick|analytics)"),
                      lambda rota: rota.abort())
+        pagina.route(RE_ROTA_MIDIA, lambda rota: rota.abort())
         _abrir(pagina, pagina_url)
         pagina.wait_for_timeout(2500)
 
@@ -500,6 +504,13 @@ def _vidlink_pela_pagina(src: dict, control) -> list[dict]:
             ctx.close()
         except Exception:
             pass
+
+
+def _vidlink(src: dict, control, offset: int = 0) -> list[dict]:
+    try:
+        return _vidlink_api(src, control, offset)
+    except ResolveError:
+        return _vidlink_pela_pagina(src, control)
 
 
 # ------------------------------------------------------------------ captura
@@ -546,6 +557,7 @@ def _captura_host(embed: str, origem: str, control) -> list[dict]:
         pagina = ctx.new_page()
         pagina.route(re.compile(r"(googletagmanager|histats|doubleclick|analytics)"),
                      lambda rota: rota.abort())
+        pagina.route(RE_ROTA_MIDIA, lambda rota: (ao_pedir(rota.request), rota.abort()))
         pagina.on("request", ao_pedir)
 
         try:
@@ -809,7 +821,7 @@ RESOLVEDORES: dict[str, Callable[..., list[dict]]] = {
     "ytdlp": _ytdlp,
     "vidsrc": _vidsrc,
     "capture": _capture,
-    "vidlink": _vidlink_api,
+    "vidlink": _vidlink,
 }
 
 
@@ -884,18 +896,82 @@ def _headers_download(cand: dict) -> dict:
         partes = urlparse(str(cand.get("url", "")))
         cab["Referer"] = f"{partes.scheme}://{partes.netloc}/"
     cab.setdefault("Origin", cab["Referer"].rstrip("/"))
+    cab.pop("Accept-Encoding", None)
     return cab
 
 
-def _espera_429(resposta, tentativa: int) -> float:
-    espera = 8.0 * tentativa
+def _espera_429(cabecalho: str | None, tentativa: int) -> float:
+    espera = 12.0 * tentativa
     try:
-        cabecalho = resposta.headers.get("retry-after")
         if cabecalho:
-            espera = max(espera, min(90.0, float(cabecalho)))
-    except (ValueError, AttributeError):
+            espera = max(espera, min(120.0, float(cabecalho)))
+    except (TypeError, ValueError):
         pass
     return espera
+
+
+def _baixar_navegador(cand: dict, temporary: Path, progress, control) -> bool:
+    """Baixa em blocos com Range pelo contexto do Chromium (mesma impressão TLS)."""
+    try:
+        from playwright.sync_api import Error as PwError
+    except ImportError:
+        return False
+    ctx = None
+    for _ in range(2):
+        try:
+            ctx = _abrir_contexto(_obter_browser())
+            break
+        except Exception:
+            _reset_browser()
+    if ctx is None:
+        return False
+    cab = _headers_download(cand)
+    url = str(cand["url"])
+    inicio = 0
+    total = 0
+    falhas = 0
+    try:
+        with temporary.open("wb") as arquivo:
+            while True:
+                control.checkpoint()
+                cab["Range"] = f"bytes={inicio}-{inicio + BLOCO - 1}"
+                try:
+                    resposta = ctx.request.get(url, headers=cab, timeout=90000,
+                                               fail_on_status_code=False)
+                except PwError:
+                    falhas += 1
+                    if falhas >= 3:
+                        return inicio > 0 and temporary.stat().st_size > 0
+                    time.sleep(6 * falhas)
+                    continue
+                if resposta.status == 429 or resposta.status == 403:
+                    falhas += 1
+                    if falhas >= 4:
+                        return inicio > 0 and temporary.stat().st_size > 0
+                    time.sleep(_espera_429(resposta.headers.get("retry-after"), falhas))
+                    continue
+                if resposta.status not in (200, 206):
+                    return inicio > 0 and temporary.stat().st_size > 0
+                pedaco = resposta.body()
+                if not pedaco:
+                    break
+                arquivo.write(pedaco)
+                inicio += len(pedaco)
+                achado = RE_FAIXA.search(resposta.headers.get("content-range") or "")
+                if achado:
+                    total = int(achado.group(1))
+                progress(inicio, total or inicio, inicio, total or inicio)
+                falhas = 0
+                if len(pedaco) < BLOCO:
+                    break
+    except Exception:
+        return inicio > 0 and temporary.stat().st_size > 0
+    finally:
+        try:
+            ctx.close()
+        except Exception:
+            pass
+    return temporary.is_file() and temporary.stat().st_size > 0
 
 
 def _baixar_ffmpeg(cand: dict, final: Path, temporary: Path, progress, control) -> bool:
@@ -947,9 +1023,9 @@ def _baixar_requests(cand: dict, temporary: Path, progress, control) -> bool:
         try:
             with requests.get(cand["url"], headers=cab, stream=True, timeout=TIMEOUT,
                               allow_redirects=True) as resposta:
-                if resposta.status_code == 429:
+                if resposta.status_code in (403, 429):
                     if tentativa < 3:
-                        time.sleep(_espera_429(resposta, tentativa))
+                        time.sleep(_espera_429(resposta.headers.get("retry-after"), tentativa))
                         continue
                     return False
                 if resposta.status_code not in (200, 206):
@@ -1017,7 +1093,7 @@ def _baixar_ytdlp(cand: dict, alvo: Path, progress, control) -> str | None:
 
 
 def baixar_ytdlp(cand: dict, output_base: str, progress, control) -> str | None:
-    """Baixa o candidato EN: ffmpeg com headers, requests em cascata e yt-dlp no fim."""
+    """Baixa o candidato EN: navegador, ffmpeg, requests e yt-dlp em cascata."""
     alvo = Path(output_base)
     alvo.parent.mkdir(parents=True, exist_ok=True)
     progressivo = bool(re.search(r"\.(mp4|m4v|webm|mkv|m4a)(\?|$)",
@@ -1027,6 +1103,10 @@ def baixar_ytdlp(cand: dict, output_base: str, progress, control) -> str | None:
         temporary = Path(str(final) + ".part")
         for tentativa in range(1, TENTATIVAS_DOWNLOAD + 1):
             temporary.unlink(missing_ok=True)
+            if _baixar_navegador(cand, temporary, progress, control):
+                os.replace(temporary, final)
+                return str(final)
+            temporary.unlink(missing_ok=True)
             if _baixar_ffmpeg(cand, final, temporary, progress, control):
                 os.replace(temporary, final)
                 return str(final)
@@ -1035,7 +1115,7 @@ def baixar_ytdlp(cand: dict, output_base: str, progress, control) -> str | None:
                 os.replace(temporary, final)
                 return str(final)
             if tentativa < TENTATIVAS_DOWNLOAD:
-                time.sleep(8 * tentativa)
+                time.sleep(10 * tentativa)
         temporary.unlink(missing_ok=True)
         if cand.get("audio_url"):
             return None
