@@ -20,6 +20,7 @@
     .empty{padding:54px 16px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:12px}.more{display:block;margin:22px auto 0;border:1px solid var(--line);background:var(--panel);border-radius:9px;padding:10px 18px}.more:disabled{opacity:.55;cursor:default}
     .download-layout{display:grid;grid-template-columns:minmax(260px,.8fr) minmax(0,1.5fr);gap:26px}.download-layout h3{font-size:15px;margin:0 0 12px}.job-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}.job-heading h3{margin:0}.list-actions{display:flex;flex-wrap:wrap;gap:7px}.list-action{border:1px solid var(--line);border-radius:7px;background:var(--panel2);padding:6px 9px;font-size:11px}.list-action:hover{border-color:var(--accent)}.list-action:disabled{opacity:.5;cursor:wait}.job-list-scroll{max-height:min(68vh,720px);overflow-y:auto;overscroll-behavior:contain;padding-right:4px}.stack{display:flex;flex-direction:column;gap:9px}.job{padding:12px 14px;border:1px solid var(--line);background:var(--panel);border-radius:10px}.job-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.job-name{flex:1;min-width:0;font-size:13px;font-weight:650;overflow-wrap:anywhere}.job-status{flex:none;max-width:48%;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:12px;white-space:nowrap}.job-failed{padding:8px 12px}.job-failed .job-top{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px}.job-failed .job-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:normal}.job-failed .job-status{max-width:150px;color:var(--danger)}.bar{height:5px;margin-top:10px;background:#303944;border-radius:10px;overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}.bar i.indeterminate{width:28%;animation:bar-progress 1.2s ease-in-out infinite alternate}@keyframes bar-progress{from{transform:translateX(0)}to{transform:translateX(250%)}}.job-error{color:var(--danger)}.job-actions{display:flex;gap:7px;margin-top:10px}.job-failed .job-actions{margin-top:6px}.job-action{border:1px solid var(--line);border-radius:7px;background:var(--panel2);padding:5px 9px;font-size:12px}.job-action:hover{border-color:var(--accent)}.job-action.danger:hover{border-color:var(--danger);color:var(--danger)}.job-action:disabled{opacity:.5;cursor:wait}.queue-pager,.file-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px}.file-tables{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}.file-table-wrap{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--panel)}.file-table-wrap h3{padding:12px 14px;margin:0;border-bottom:1px solid var(--line)}.file-table-scroll{max-height:380px;overflow:auto;overscroll-behavior:contain}.file-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}.file-table th,.file-table td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}.file-table thead{position:sticky;top:0;z-index:1;background:var(--panel)}.file-table th{color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}.file-table tr:last-child td{border-bottom:0}.file-table th:last-child,.file-table td:last-child{width:78px;text-align:right;white-space:nowrap}.file-table a{display:block;color:var(--accent);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-table a:hover{text-decoration:underline}.file-empty{text-align:center!important;color:var(--muted);padding:22px 10px!important}
     .job-metrics{display:flex;flex-wrap:wrap;gap:5px 12px;margin-top:8px;color:var(--muted);font-size:12px}.job-metrics strong{color:var(--text);font-weight:600}.download-summary{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin-top:24px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.summary-stat{min-width:0}.summary-label{display:block;color:var(--muted);font-size:11px}.summary-value{display:block;margin-top:3px;font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .diagnostic-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin:16px 0}.diagnostic-stat{min-width:0;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel2)}.diagnostic-stat span{display:block;color:var(--muted);font-size:11px}.diagnostic-stat strong{display:block;margin-top:3px;font-size:13px;overflow-wrap:anywhere}.diagnostic-error,.diagnostic-report{max-height:34vh;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:9px;background:#101318;color:#ffd0d0;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.diagnostic-report{max-height:48vh;color:#d5e2e7}.diagnostic-attempt{padding:10px 12px;margin:7px 0;border:1px solid var(--line);border-radius:9px;background:var(--panel2);font-size:12px}.diagnostic-attempt strong{color:var(--text)}.diagnostic-attempt p{margin:4px 0 0;color:var(--muted);overflow-wrap:anywhere}.diagnostic-source-code{margin:7px 0 0;padding:8px;border-radius:6px;background:#101318;color:#c4d0d8;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.diagnostic-empty{color:var(--muted);font-size:12px}.diagnostic-details{margin-top:14px}.diagnostic-details summary{cursor:pointer;color:var(--accent);font-size:13px;font-weight:650}.diagnostic-details .diagnostic-report{margin-top:8px}
     dialog{width:min(850px,calc(100% - 28px));max-height:90vh;overflow:auto;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--text)}dialog::backdrop{background:#050709c9;backdrop-filter:blur(3px)}.modal-content{padding:22px}.modal-content h2{font-size:22px;line-height:1.2;margin:0 34px 6px 0}.modal-desc{color:var(--muted);font-size:13px}.detail-hero{display:grid;grid-template-columns:126px minmax(0,1fr);gap:19px;align-items:start;padding-right:28px}.detail-poster{width:126px;aspect-ratio:2/3;object-fit:cover;border-radius:9px;background:var(--panel2)}.detail-poster[hidden]{display:none}.detail-cast{margin-top:12px;color:var(--muted);font-size:13px;line-height:1.6}.synopsis{font-size:14px;line-height:1.6;color:#d8dee5;margin:15px 0}.detail-section-title{font-size:14px;margin:17px 0 8px}.episode-guide{border-top:1px solid var(--line);padding-top:2px;margin-top:14px}.season-guide{border:1px solid var(--line);border-radius:9px;margin:8px 0;overflow:hidden}.season-guide summary{cursor:pointer;padding:10px 12px;background:var(--panel2);font-size:13px;font-weight:650}.episode-list{padding:4px 12px}.episode-row{display:grid;grid-template-columns:46px minmax(0,1fr);gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}.episode-row:last-child{border-bottom:0}.episode-number{font-weight:700;color:var(--text)}.episode-streams{display:flex;flex-wrap:wrap;gap:5px}.stream-badge{display:inline-flex;padding:2px 7px;border-radius:999px;background:#263c3a;color:var(--accent);font-size:11px}.stream-overview{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.fields{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:16px 0}.field{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}.field[hidden]{display:none}.field select,.field input{width:auto;max-width:190px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;color:var(--text)}.field input[type=radio]{accent-color:var(--accent)}.versions{display:flex;gap:16px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}.btn{border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:9px 14px}.btn.primary{background:var(--accent);border-color:var(--accent);color:#061613;font-weight:750}.close{position:absolute;right:17px;top:14px;width:34px;height:34px;border:0;border-radius:50%;background:transparent;color:var(--muted);font-size:23px}.close:hover{background:var(--panel2);color:var(--text)}
     .notice{color:var(--muted);font-size:13px;margin-top:15px}.btn.danger{border-color:#8a4545;color:#ffaaaa}.novelty-deleted{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}.novelty-row{padding:9px 12px;border-bottom:1px solid var(--line);font-size:13px}.novelty-row:last-child{border-bottom:0}.new-episode{background:#3a3323;color:#ffd47a}.sync-progress .bar{height:9px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
     .toast{position:fixed;right:20px;bottom:20px;z-index:20;max-width:min(440px,calc(100% - 32px));padding:12px 16px;border:1px solid #39786f;border-radius:10px;background:#19312e;color:#cafff5;box-shadow:0 8px 28px #0008}.toast[hidden]{display:none}
@@ -113,6 +114,16 @@
     <p class="notice">A legenda será gravada ao lado do vídeo quando existir. Se não houver, o vídeo termina sem ela e a aba Downloads mostrará um aviso.</p>
     <section class="episode-guide"><h3 class="detail-section-title">Se não funcionar</h3><p class="notice">Na aba Downloads, você poderá tentar outro servidor, outra qualidade ou repetir o download.</p><div class="fields"><label class="field" for="en-server-offset">Servidor<select id="en-server-offset"><option value="0">Automático</option><option value="1">Começar pelo outro servidor</option></select></label><button id="en-lower-quality" class="btn" type="button">Escolher outra qualidade</button></div></section>
     <div class="modal-actions"><button id="en-download-cancel" class="btn" type="button">Voltar</button><button id="en-download-confirm" class="btn primary" type="button">Confirmar e acompanhar em Downloads</button></div>
+  </div></dialog>
+  <dialog id="job-diagnostic-dialog" aria-labelledby="job-diagnostic-title"><button id="job-diagnostic-close" class="close" aria-label="Fechar">×</button><div class="modal-content">
+    <h2 id="job-diagnostic-title">Diagnóstico do download</h2>
+    <p id="job-diagnostic-description" class="modal-desc"></p>
+    <div id="job-diagnostic-summary" class="diagnostic-summary"></div>
+    <section><h3 class="detail-section-title">Erro registrado</h3><pre id="job-diagnostic-error" class="diagnostic-error"></pre></section>
+    <section><h3 class="detail-section-title">Descritores enviados aos resolvedores</h3><div id="job-diagnostic-sources"></div></section>
+    <section><h3 class="detail-section-title">Tentativas e fontes</h3><div id="job-diagnostic-attempts"></div></section>
+    <details class="diagnostic-details"><summary>Relatório técnico integral (JSON)</summary><pre id="job-diagnostic-report" class="diagnostic-report"></pre></details>
+    <div class="modal-actions"><button id="job-diagnostic-copy" class="btn" type="button">Copiar relatório</button><button id="job-diagnostic-dismiss" class="btn primary" type="button">Fechar</button></div>
   </div></dialog>
   <footer class="credits" aria-label="Créditos">
     <a href="https://www.themoviedb.org/" target="_blank" rel="noopener" aria-label="The Movie Database">
@@ -622,6 +633,88 @@
         $('#completed-page').textContent='Erro ao carregar';
       } finally { completedRefreshing=false; }
     }
+    function sanitizeDiagnosticText(value) {
+      let text=String(value??'');
+      text=text.replace(/https?:\/\/[^\s"'<>]+/gi,raw=>{
+        const trailing=(raw.match(/[.,);\]}>]+$/)||[''])[0],base=trailing?raw.slice(0,-trailing.length):raw;
+        try { const url=new URL(base);return `${url.protocol}//${url.host}${url.pathname}${trailing}`; }
+        catch { return `[URL omitida]${trailing}`; }
+      });
+      text=text.replace(/\bBearer\s+[^\s,;]+/gi,'Bearer [REDACTED]');
+      return text.replace(/\b(cookie|set-cookie|authorization|proxy-authorization|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|token|signature|sig|password)(["']?\s*[:=]\s*["']?)[^\s,;"']+/gi,'$1$2[REDACTED]');
+    }
+    function sanitizeDiagnosticObject(value) {
+      if(typeof value==='string')return sanitizeDiagnosticText(value);
+      if(Array.isArray(value))return value.map(sanitizeDiagnosticObject);
+      if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,sanitizeDiagnosticObject(item)]));
+      return value;
+    }
+    function summarizeDiagnosticSources(sources) {
+      if(!Array.isArray(sources))return [];
+      return sources.slice(0,30).map(source=>{
+        if(typeof source==='string')return {url:sanitizeDiagnosticText(source)};
+        if(!source||typeof source!=='object')return {tipo:typeof source};
+        const item={};
+        for(const key of ['provider','kind','tmdb','tmdb_id','season','episode','max_h'])if(['string','number','boolean'].includes(typeof source[key]))item[key]=source[key];
+        for(const key of ['url','embed','embed_url','referer','referrer'])if(typeof source[key]==='string')item[key]=sanitizeDiagnosticText(source[key]);
+        const headerNames=['headers','http_headers','audio_headers'].flatMap(key=>source[key]&&typeof source[key]==='object'?Object.keys(source[key]):[]);
+        if(headerNames.length)item.headers_enviados_nomes=[...new Set(headerNames)].sort();
+        return Object.keys(item).length?item:{tipo:'descritor sem campos reconhecidos'};
+      });
+    }
+    function diagnosticForJob(job,snapshot=null) {
+      try {
+        if(snapshot&&typeof snapshot==='object')return sanitizeDiagnosticObject(snapshot);
+        if(typeof snapshot==='string'&&snapshot)return sanitizeDiagnosticObject(JSON.parse(snapshot));
+        if(job.diagnostico)return sanitizeDiagnosticObject(JSON.parse(job.diagnostico));
+      } catch {}
+      let task={};
+      try { task=JSON.parse(job.task_json||'{}')||{}; } catch {}
+      const error=sanitizeDiagnosticText(job.erro||'falha no download');
+      const attempts=error.split(';').map(part=>part.trim()).filter(Boolean).slice(0,20).map(part=>{
+        const split=part.indexOf(':');
+        return {fonte:split>0?sanitizeDiagnosticText(part.slice(0,split)):'resolução',fase:'resolução',erro:sanitizeDiagnosticText(split>0?part.slice(split+1).trim():part)};
+      });
+      const outputBase=typeof task.output_base==='string'?task.output_base.split(/[\\/]/).filter(Boolean).pop():null;
+      return {
+        versao_schema:1,capturado_em:null,
+        job:{id:Number(job.id),titulo:sanitizeDiagnosticText(job.titulo),estado:job.status,fase:'não registrada (job anterior à captura técnica)'},
+        falha:{tipo:(error.match(/^([A-Za-z_][\w.]*(?:Error|Exception)):/)||[])[1]||'DownloadError',mensagem:error},
+        progresso:{percentual:Number(job.pct)||0,bytes_baixados:Number(job.bytes_done)||0,bytes_totais:Number(job.bytes_total)||0},
+        solicitacao:{versao:task.version||'dub/leg ou não informada',qualidade_maxima:task.max_h??null,offset_provider:task.provider_offset??null,tipo_tmdb:task.kind??null,tmdb_id:task.tmdb_id??null,temporada:task.season??null,episodio:task.episode??null,legenda_solicitada:task.legenda??null,arquivo_destino:outputBase,quantidade_fontes:Array.isArray(task.sources)?task.sources.length:null,fontes:summarizeDiagnosticSources(task.sources)},
+        tentativas:attempts,ambiente:{coleta:'não disponível para este job antigo'},traceback:null,
+        observacao:'Snapshot técnico não existia quando este job falhou; os campos disponíveis foram reconstruídos de task_json e do erro salvo.'
+      };
+    }
+    function openJobDiagnostic(job,snapshot=null) {
+      const report=diagnosticForJob(job,snapshot),jobInfo=report.job||{},failure=report.falha||{},request=report.solicitacao||{},progress=report.progresso||{},runtime=report.ambiente||{};
+      $('#job-diagnostic-description').textContent=`Job #${jobInfo.id??job.id} · ${jobInfo.titulo??job.titulo} · ${report.capturado_em?`capturado ${report.capturado_em}`:'snapshot reconstruído com os dados disponíveis'}`;
+      const summary=$('#job-diagnostic-summary');summary.replaceChildren();
+      const values=[['Etapa',jobInfo.fase||'não registrada'],['Tipo de erro',failure.tipo||'DownloadError'],['Versão',request.versao||'não informada'],['Qualidade',request.qualidade_maxima?`${request.qualidade_maxima}p`:'não informada'],['Fontes',request.quantidade_fontes??(request.fontes||[]).length],['Progresso',`${Number(progress.percentual||0).toFixed(1)}% · ${formatBytes(progress.bytes_baixados||0)} / ${formatBytes(progress.bytes_totais||0)}`],['FFmpeg',runtime.ffmpeg||'não localizado / não registrado'],['Python',runtime.python||'não registrado']];
+      for(const [label,value] of values){const stat=document.createElement('div');stat.className='diagnostic-stat';const name=document.createElement('span');name.textContent=label;const amount=document.createElement('strong');amount.textContent=String(value);stat.append(name,amount);summary.append(stat);}
+      $('#job-diagnostic-error').textContent=failure.mensagem||sanitizeDiagnosticText(job.erro||'falha no download');
+      const attemptList=$('#job-diagnostic-attempts');attemptList.replaceChildren();
+      const attempts=Array.isArray(report.tentativas)?report.tentativas:[];
+      if(!attempts.length){const empty=document.createElement('p');empty.className='diagnostic-empty';empty.textContent='O snapshot não contém tentativas individuais. Consulte o erro e a lista de fontes abaixo.';attemptList.append(empty);}
+      for(const [index,attempt] of attempts.entries()){
+        const row=document.createElement('div');row.className='diagnostic-attempt';const heading=document.createElement('strong');heading.textContent=`${index+1}. ${attempt.fonte||attempt.provider||'Fonte'} · ${attempt.fase||'tentativa'}${attempt.resultado?` · ${attempt.resultado}`:''}`;row.append(heading);
+        const detail=document.createElement('p');detail.textContent=sanitizeDiagnosticText(attempt.erro||attempt.mensagem||attempt.resultado||'Sem mensagem adicional');row.append(detail);attemptList.append(row);
+      }
+      $('#job-diagnostic-report').textContent=JSON.stringify(report,null,2);
+      const dialog=$('#job-diagnostic-dialog');dialog.dataset.jobId=String(job.id);if(!dialog.open)dialog.showModal();
+      if(!snapshot&&!job.diagnostico){
+        api(`/api/jobs/${job.id}/diagnostic`).then(result=>{
+          if(dialog.open&&dialog.dataset.jobId===String(job.id)&&result.diagnostico)openJobDiagnostic(job,result.diagnostico);
+        }).catch(()=>{if(dialog.open&&dialog.dataset.jobId===String(job.id))$('#job-diagnostic-description').textContent+=' · snapshot do servidor indisponível; exibindo dados reconstruídos';});
+      }
+    }
+    $('#job-diagnostic-close').addEventListener('click',()=>$('#job-diagnostic-dialog').close());
+    $('#job-diagnostic-dismiss').addEventListener('click',()=>$('#job-diagnostic-dialog').close());
+    $('#job-diagnostic-copy').addEventListener('click',async()=>{
+      const content=$('#job-diagnostic-report').textContent;
+      try { await navigator.clipboard.writeText(content);showToast('Relatório técnico copiado.'); }
+      catch { const field=document.createElement('textarea');field.value=content;field.style.position='fixed';field.style.opacity='0';document.body.append(field);field.select();const copied=document.execCommand('copy');field.remove();if(copied)showToast('Relatório técnico copiado.');else alert('Não foi possível copiar automaticamente. Selecione e copie o JSON.'); }
+    });
     async function refreshDownloads() {
       if (refreshingDownloads) return;
       refreshingDownloads = true;
@@ -658,6 +751,7 @@
             const isOriginal=(()=>{try{return JSON.parse(job.task_json||'{}').version==='orig';}catch{return false;}})();
             if(isOriginal){const advice=document.createElement('p');advice.className='notice';advice.textContent='Se não funcionar, tente outro servidor, outra qualidade ou repita o download.';card.append(advice);}
             const actions=document.createElement('div');actions.className='job-actions';
+            const diagnosticButton=document.createElement('button');diagnosticButton.type='button';diagnosticButton.className='job-action';diagnosticButton.textContent='Ver diagnóstico';diagnosticButton.addEventListener('click',()=>openJobDiagnostic(job));actions.append(diagnosticButton);
             const addRetry=(label,options={})=>{const button=document.createElement('button');button.type='button';button.className='job-action';button.textContent=label;button.addEventListener('click',async()=>{button.disabled=true;try{await api(`/api/jobs/${job.id}/retry`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(options)});await refreshDownloads();showToast('Nova tentativa adicionada à fila.');}catch(error){alert(error.message);button.disabled=false;}});actions.append(button);};
             if(isOriginal){addRetry('Outro servidor',{outro_servidor:true});addRetry('Outra qualidade',{outra_qualidade:true});}
             addRetry('Tentar novamente');card.append(actions);jobs.append(card);continue;

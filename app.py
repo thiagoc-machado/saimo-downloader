@@ -5,15 +5,22 @@ from __future__ import annotations
 import json
 import hashlib
 import hmac
+import importlib.util
+from importlib.metadata import PackageNotFoundError, version as package_version
 import os
+import platform
 import queue
+import re
 import shutil
 import sqlite3
+import sys
 import threading
 import time
+import traceback
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import requests
 from dotenv import load_dotenv
@@ -186,6 +193,8 @@ def preparar_armazenamento() -> None:
             con.execute("ALTER TABLE jobs ADD COLUMN hidden INTEGER DEFAULT 0")
         if "aviso" not in columns:
             con.execute("ALTER TABLE jobs ADD COLUMN aviso TEXT")
+        if "diagnostico" not in columns:
+            con.execute("ALTER TABLE jobs ADD COLUMN diagnostico TEXT")
         con.execute("CREATE INDEX IF NOT EXISTS ix_jobs_item_status ON jobs(item_id,status)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_jobs_hidden_status_id ON jobs(hidden,status,id DESC)")
         con.executescript("""
@@ -266,7 +275,7 @@ def preparar_armazenamento() -> None:
                     limpar_dados_job(payload["output_base"])
                     con.execute("UPDATE jobs SET status='cancelado',pct=0 WHERE id=?", (row["id"],))
                     continue
-                con.execute("UPDATE jobs SET status='fila',erro=NULL WHERE id=?", (row["id"],))
+                con.execute("UPDATE jobs SET status='fila',erro=NULL,diagnostico=NULL WHERE id=?", (row["id"],))
                 enfileirar(task)
             except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                 con.execute("UPDATE jobs SET status='erro',erro=? WHERE id=?",
@@ -311,6 +320,188 @@ def validar_sessao_media(value: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+_DIAG_URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+
+
+def _diagnostico_url(value: str) -> str:
+    """Mantém host/caminho para análise, removendo query, fragmento e credenciais."""
+    punctuation = ".,);]}>"
+    raw = value.rstrip(punctuation)
+    suffix = value[len(raw):]
+    try:
+        parsed = urlsplit(raw)
+        host = parsed.hostname or ""
+        if not host:
+            return "[URL omitida]" + suffix
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        port = f":{parsed.port}" if parsed.port else ""
+        path = parsed.path[:300]
+        return f"{parsed.scheme}://{host}{port}{path}{suffix}"
+    except (ValueError, UnicodeError):
+        return "[URL omitida]" + suffix
+
+
+def _sanitizar_diagnostico_texto(value: object, limite: int = 6000) -> str:
+    text = str(value or "")
+    text = _DIAG_URL_RE.sub(lambda match: _diagnostico_url(match.group(0)), text)
+    text = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer [REDACTED]", text)
+    text = re.sub(
+        r"(?i)\b(cookie|set-cookie|authorization|proxy-authorization|x-api-key|"
+        r"api[_-]?key|access[_-]?token|refresh[_-]?token|token|signature|sig|password)"
+        r"([\"']?\s*[:=]\s*[\"']?)[^\s,;\"']+",
+        r"\1\2[REDACTED]", text)
+    return text[:limite]
+
+
+def _resumo_fontes_diagnostico(sources: object) -> list[dict]:
+    if not isinstance(sources, list):
+        return []
+    output = []
+    for source in sources[:30]:
+        if isinstance(source, str):
+            output.append({"url": _sanitizar_diagnostico_texto(source, 500)})
+            continue
+        if not isinstance(source, dict):
+            output.append({"tipo": type(source).__name__})
+            continue
+        item = {}
+        for key in ("provider", "kind", "tmdb", "tmdb_id", "season", "episode", "max_h"):
+            value = source.get(key)
+            if isinstance(value, (str, int, float, bool)):
+                item[key] = value
+        for key in ("url", "embed", "embed_url", "referer", "referrer"):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                item[key] = _sanitizar_diagnostico_texto(value, 500)
+        header_names = set()
+        for key in ("headers", "http_headers", "audio_headers"):
+            value = source.get(key)
+            if isinstance(value, dict):
+                header_names.update(str(name)[:100] for name in value)
+        if header_names:
+            item["headers_enviados_nomes"] = sorted(header_names)
+        output.append(item or {"tipo": "descritor sem campos reconhecidos"})
+    return output
+
+
+def _tentativas_do_erro(error: object, phase: str = "resolvendo fontes") -> list[dict]:
+    text = str(error or "")
+    text = re.sub(r"^(?:ResolveError|RuntimeError):\s*", "", text)
+    text = re.sub(r"^sem_fontes:\s*", "", text)
+    # Resolve EN agrega falhas individuais com separador ';'; preservamos cada
+    # segmento legível para que a tentativa de cada provider apareça no relatório.
+    parts = [part.strip() for part in text.split(";") if part.strip()]
+    attempts = []
+    for part in parts[:20]:
+        provider, separator, message = part.partition(":")
+        attempts.append({
+            "fonte": _sanitizar_diagnostico_texto(provider.strip(), 100) if separator else "resolução",
+            "fase": phase,
+            "erro": _sanitizar_diagnostico_texto(message.strip() if separator else part, 1000),
+        })
+    return attempts
+
+
+def _runtime_diagnostico() -> dict:
+    def instalado(module: str) -> bool:
+        try:
+            return importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            return False
+
+    def versao(package: str) -> str | None:
+        try:
+            return package_version(package)
+        except PackageNotFoundError:
+            return None
+
+    browser_root = Path(os.getenv("PLAYWRIGHT_BROWSERS_PATH") or Path.home() / ".cache/ms-playwright")
+    chromium_candidates = []
+    for pattern in ("chromium-*/chrome-linux/chrome", "chromium-*/chrome-linux64/chrome",
+                    "chromium-*/chrome-win/chrome.exe", "chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"):
+        chromium_candidates.extend(browser_root.glob(pattern))
+    try:
+        disk_free = shutil.disk_usage(core.DESTINO).free
+    except OSError:
+        disk_free = None
+
+    return {
+        "python": sys.version.split()[0],
+        "executavel_python": sys.executable,
+        "sistema": platform.platform(aliased=True, terse=True),
+        "arquitetura": platform.machine(),
+        "ffmpeg": shutil.which("ffmpeg"),
+        "pasta_download": core.DESTINO,
+        "espaco_livre_download_bytes": disk_free,
+        "yt_dlp_executavel": shutil.which(saimo_en.YTDLP),
+        "yt_dlp_instalado": instalado("yt_dlp"),
+        "yt_dlp_versao": versao("yt-dlp"),
+        "playwright_instalado": instalado("playwright"),
+        "playwright_versao": versao("playwright"),
+        "chromium_executavel": str(chromium_candidates[0]) if chromium_candidates else None,
+        "config_download": {
+            "workers_paralelos": PARALELO,
+            "pt_timeout_segundos": core.TIMEOUT,
+            "pt_tentativas": core.TENTATIVAS,
+            "segmentos_paralelos": core.SEGMENTOS,
+            "en_timeout_segundos": saimo_en.TIMEOUT,
+            "en_max_providers": saimo_en.MAX_PROVIDERS,
+            "en_max_candidatos": saimo_en.MAX_CANDIDATOS,
+        },
+    }
+
+
+def _montar_diagnostico_job(job_id: int, title: str, task_data: dict, phase: str,
+                            error: object, attempts: list[dict] | None = None,
+                            exception_type: str | None = None,
+                            traceback_text: str | None = None,
+                            progress: dict | None = None) -> dict:
+    task_data = task_data if isinstance(task_data, dict) else {}
+    sources = task_data.get("sources")
+    output_base = task_data.get("output_base")
+    request_data = {
+        "versao": task_data.get("version", "dub/leg ou não informada"),
+        "qualidade_maxima": task_data.get("max_h"),
+        "offset_provider": task_data.get("provider_offset"),
+        "tipo_tmdb": task_data.get("kind"),
+        "tmdb_id": task_data.get("tmdb_id"),
+        "temporada": task_data.get("season"),
+        "episodio": task_data.get("episode"),
+        "legenda_solicitada": task_data.get("legenda"),
+        "arquivo_destino": Path(str(output_base)).name if output_base else None,
+        "quantidade_fontes": len(sources) if isinstance(sources, list) else None,
+        "fontes": _resumo_fontes_diagnostico(sources),
+    }
+    clean_attempts = attempts if attempts is not None else _tentativas_do_erro(error)
+    return {
+        "versao_schema": 1,
+        "capturado_em": datetime.now(timezone.utc).isoformat(),
+        "job": {"id": int(job_id), "titulo": _sanitizar_diagnostico_texto(title, 300),
+                "estado": "erro", "fase": _sanitizar_diagnostico_texto(phase, 120)},
+        "falha": {"tipo": exception_type or "DownloadError",
+                  "mensagem": _sanitizar_diagnostico_texto(error, 3000)},
+        "progresso": progress or {},
+        "solicitacao": request_data,
+        "tentativas": clean_attempts[:30],
+        "ambiente": _runtime_diagnostico(),
+        "traceback": _sanitizar_diagnostico_texto(traceback_text, 12000) if traceback_text else None,
+    }
+
+
+def _salvar_diagnostico_job(con: sqlite3.Connection, job_id: int, title: str,
+                            task_data: dict, phase: str, error: object,
+                            attempts: list[dict] | None = None,
+                            exception_type: str | None = None,
+                            traceback_text: str | None = None) -> str:
+    row = con.execute("SELECT pct,bytes_done,bytes_total FROM jobs WHERE id=?", (job_id,)).fetchone()
+    progress = ({"percentual": row["pct"], "bytes_baixados": row["bytes_done"],
+                 "bytes_totais": row["bytes_total"]} if row else {})
+    report = _montar_diagnostico_job(job_id, title, task_data, phase, error, attempts,
+                                     exception_type, traceback_text, progress)
+    return json.dumps(report, ensure_ascii=False)
+
+
 def worker() -> None:
     while True:
         job_id, title, sources, output_base = fila.get()
@@ -319,6 +510,9 @@ def worker() -> None:
         con = db()
         progress_lock = threading.Lock()
         control = core.DownloadControl()
+        phase = "inicializando"
+        task_data = {}
+        attempts = []
         try:
             with controle_lock:
                 controles[job_id] = control
@@ -335,6 +529,7 @@ def worker() -> None:
             except (TypeError, ValueError, json.JSONDecodeError):
                 task_data = {}
             control.checkpoint()
+            phase = "resolvendo fontes"
             is_original = task_data.get("version") == "orig"
             if is_original:
                 quality = int(task_data.get("max_h") or 1080)
@@ -345,8 +540,12 @@ def worker() -> None:
             else:
                 resolved = core.resolver_fontes(sources, control)
             if not resolved:
-                con.execute("UPDATE jobs SET status='erro',aviso=NULL,erro=? WHERE id=?",
-                            ("sem fonte disponível", job_id))
+                error_message = "sem fonte disponível"
+                diagnostic = _salvar_diagnostico_job(
+                    con, job_id, title, task_data, phase, error_message,
+                    attempts=[{"fase": phase, "erro": error_message}])
+                con.execute("UPDATE jobs SET status='erro',aviso=NULL,erro=?,diagnostico=? WHERE id=?",
+                            (error_message, diagnostic, job_id))
                 con.commit()
                 continue
 
@@ -371,9 +570,11 @@ def worker() -> None:
             result = None
             source_errors = []
             if is_original:
-                for candidate in resolved:
+                phase = "baixando mídia"
+                for candidate_index, candidate in enumerate(resolved, start=1):
                     control.checkpoint()
                     candidate["quality"] = quality
+                    provider = candidate.get("provider") or "fonte"
                     try:
                         if candidate.get("audio_url") or candidate.get("provider") == "ytdlp":
                             result = saimo_en.baixar_ytdlp(candidate, output_base, progress, control)
@@ -382,17 +583,29 @@ def worker() -> None:
                         else:
                             result = core.baixar([candidate], output_base, progress, control)
                         if result:
+                            attempts.append({"tentativa": candidate_index, "fonte": provider,
+                                             "fase": "download", "resultado": "concluído"})
                             break
-                        source_errors.append(f"{candidate.get('provider') or 'fonte'}: falha no download")
+                        failure = "falha no download; resolvedor não retornou arquivo"
+                        source_errors.append(f"{provider}: {failure}")
+                        attempts.append({"tentativa": candidate_index, "fonte": provider,
+                                         "fase": "download", "resultado": "falhou",
+                                         "erro": failure})
                     except (core.DownloadPaused, core.DownloadCancelled):
                         raise
                     except Exception as exc:
-                        source_errors.append(f"{candidate.get('provider') or 'fonte'}: {str(exc)[:100]}")
+                        failure = _sanitizar_diagnostico_texto(exc, 1000)
+                        source_errors.append(f"{provider}: {failure[:100]}")
+                        attempts.append({"tentativa": candidate_index, "fonte": provider,
+                                         "fase": "download", "resultado": "falhou",
+                                         "tipo_erro": type(exc).__name__, "erro": failure})
             else:
+                phase = "baixando mídia"
                 result = core.baixar(resolved, output_base, progress, control)
 
             aviso = None
             if result and is_original and task_data.get("legenda") and task_data.get("tmdb_id"):
+                phase = "buscando legenda"
                 try:
                     legenda = saimo_en.buscar_legenda(
                         int(task_data["tmdb_id"]), str(task_data.get("kind") or "movie"),
@@ -406,12 +619,18 @@ def worker() -> None:
             with controle_lock:
                 control.checkpoint()
                 if result:
+                    phase = "finalizando arquivo"
                     relative = os.path.relpath(result, core.DESTINO)
-                    con.execute("UPDATE jobs SET status='concluido', pct=100, arquivo=?,aviso=?,erro=NULL WHERE id=?",
+                    con.execute("UPDATE jobs SET status='concluido', pct=100, arquivo=?,aviso=?,erro=NULL,diagnostico=NULL WHERE id=?",
                                 (relative, aviso, job_id))
                 else:
+                    error_message = "; ".join(source_errors[-3:]) or "todas as fontes falharam"
+                    diagnostic = _salvar_diagnostico_job(
+                        con, job_id, title, task_data, phase, error_message,
+                    attempts=attempts or _tentativas_do_erro(error_message, phase))
                     con.execute("UPDATE jobs SET status='erro', erro=? WHERE id=?",
-                                ("; ".join(source_errors[-3:]) or "todas as fontes falharam", job_id))
+                                (_sanitizar_diagnostico_texto(error_message, 1000), job_id))
+                    con.execute("UPDATE jobs SET diagnostico=? WHERE id=?", (diagnostic, job_id))
                 con.commit()
         except core.DownloadPaused:
             row = con.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -434,8 +653,13 @@ def worker() -> None:
                 con.execute("UPDATE jobs SET status='cancelado',pct=0,arquivo=NULL,erro=NULL WHERE id=?",
                             (job_id,))
             else:
-                con.execute("UPDATE jobs SET status='erro', erro=? WHERE id=?",
-                            (str(exc)[:200] or type(exc).__name__, job_id))
+                error_message = _sanitizar_diagnostico_texto(str(exc)[:1000] or type(exc).__name__, 1000)
+                diagnostic = _salvar_diagnostico_job(
+                    con, job_id, title, task_data, phase, error_message,
+                    attempts=attempts or _tentativas_do_erro(error_message, phase),
+                    exception_type=type(exc).__name__, traceback_text=traceback.format_exc())
+                con.execute("UPDATE jobs SET status='erro',erro=?,diagnostico=? WHERE id=?",
+                            (error_message[:200], diagnostic, job_id))
             con.commit()
         finally:
             with controle_lock:
@@ -946,10 +1170,32 @@ def jobs(req: Request, pagina: int = 0, limite: int = 25):
         active_rows = [dict(row) for row in con.execute(
             "SELECT * FROM jobs WHERE hidden=0 AND status IN "
             "('resolvendo','baixando','pausando','cancelando') ORDER BY id DESC")]
+        # O relatório completo só é carregado quando o usuário abre o modal;
+        # a lista é consultada em intervalos curtos durante o progresso.
+        for row in rows + active_rows:
+            row.pop("diagnostico", None)
         counts = {row["status"]: row["total"] for row in
                   con.execute("SELECT status,COUNT(*) AS total FROM jobs WHERE hidden=0 GROUP BY status")}
     return {"jobs": rows, "ativos": active_rows, "counts": counts, "total": total, "pagina": pagina,
             "limite": limite, "paginas": paginas}
+
+
+@app.get("/api/jobs/{job_id}/diagnostic")
+def job_diagnostic(req: Request, job_id: int):
+    checar(req)
+    with session() as con:
+        row = con.execute(
+            "SELECT id,titulo,status,erro,diagnostico,criado,pct,bytes_done,bytes_total "
+            "FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "download não encontrado")
+    try:
+        diagnostic = json.loads(row["diagnostico"] or "")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        diagnostic = None
+    return {"job": {key: row[key] for key in
+                     ("id", "titulo", "status", "erro", "criado", "pct", "bytes_done", "bytes_total")},
+            "diagnostico": diagnostic}
 
 
 @app.get("/api/jobs/completed")
@@ -1020,7 +1266,7 @@ def resume_all_jobs(req: Request):
             try:
                 payload = json.loads(row["task_json"] or "")
                 task = (int(row["id"]), row["titulo"], payload["sources"], payload["output_base"])
-                con.execute("UPDATE jobs SET status='fila',erro=NULL WHERE id=?", (row["id"],))
+                con.execute("UPDATE jobs SET status='fila',erro=NULL,diagnostico=NULL WHERE id=?", (row["id"],))
                 tasks.append(task)
             except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                 con.execute("UPDATE jobs SET status='erro',erro=? WHERE id=?",
@@ -1050,7 +1296,7 @@ def retry_all_jobs(req: Request):
                     raise ValueError("payload inválido")
                 job_id = int(row["id"])
                 updated = con.execute(
-                    "UPDATE jobs SET status='fila',pct=0,erro=NULL,bytes_done=0,bytes_total=0,arquivo=NULL "
+                    "UPDATE jobs SET status='fila',pct=0,erro=NULL,diagnostico=NULL,bytes_done=0,bytes_total=0,arquivo=NULL "
                     "WHERE id=? AND status='erro'", (job_id,)
                 ).rowcount
                 if updated:
@@ -1103,7 +1349,7 @@ def resume_job(req: Request, job_id: int):
             task = (job_id, row["titulo"], payload["sources"], payload["output_base"])
         except (ValueError, TypeError, KeyError, json.JSONDecodeError):
             raise HTTPException(409, "dados do download não permitem retomada")
-        con.execute("UPDATE jobs SET status='fila',erro=NULL WHERE id=?", (job_id,))
+        con.execute("UPDATE jobs SET status='fila',erro=NULL,diagnostico=NULL WHERE id=?", (job_id,))
     if task:
         enfileirar(task)
     return {"ok": True, "status": "fila"}
@@ -1144,7 +1390,7 @@ async def retry_job(req: Request, job_id: int):
         except (ValueError, TypeError, KeyError, json.JSONDecodeError):
             raise HTTPException(409, "dados do download não permitem nova tentativa")
         updated = con.execute(
-            "UPDATE jobs SET status='fila',pct=0,erro=NULL,bytes_done=0,bytes_total=0,arquivo=NULL "
+            "UPDATE jobs SET status='fila',pct=0,erro=NULL,diagnostico=NULL,bytes_done=0,bytes_total=0,arquivo=NULL "
             "WHERE id=? AND status='erro'", (job_id,)).rowcount
         if not updated:
             raise HTTPException(409, "o download mudou de estado; atualize a lista")
